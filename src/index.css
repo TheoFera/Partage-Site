@@ -329,7 +329,7 @@
     --primary: #ff6b4a;
     --secondary: #28c1a5;
     --accent: #ffd166;
-    --background: #f9fafb;
+    --background: #F9F2E5;
     --card-bg: #fff;
     --text-primary: #1f2937;
     --text-secondary: #6b7280;
@@ -341,7 +341,7 @@
 
   body {
     color: #1f2937;
-    background-color: #f9fafb;
+    background-color: #F9F2E5;
     font-family: Inter, system-ui, -apple-system, sans-serif;
   }
 
@@ -1308,6 +1308,30 @@
   syntax: "<percentage>";
   inherits: false;
   initial-value: 100%;
+}
+
+/* Custom layout helpers */
+.create-order-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1024px) {
+  .create-order-layout {
+    grid-template-columns: minmax(0, 1fr) 420px;
+    align-items: start;
+  }
+
+  .create-order-summary {
+    position: sticky;
+    top: 96px;
+  }
+}
+
+@media (max-width: 1023.98px) {
+  .create-order-summary {
+    position: static;
+  }
 }
 
 @property --tw-drop-shadow-size {

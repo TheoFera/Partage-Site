@@ -7,46 +7,66 @@ import { CreateOrderForm } from './components/CreateOrderForm';
 import { ProfileView } from './components/ProfileView';
 import { MessagesView } from './components/MessagesView';
 import { AddProductForm } from './components/AddProductForm';
-import { mockProducts, mockUser } from './data/mockData';
-import { Product, DeckCard, User, UserRole } from './types';
-import { toast, Toaster } from 'sonner@2.0.3';
+import { ClientSwipeView } from './components/ClientSwipeView';
+import { ProducerOrdersView } from './components/ProducerOrdersView';
+import { ProducerProductsView } from './components/ProducerProductsView';
+import { mockProducts, mockUser, mockGroupOrders } from './data/mockData';
+import { Product, DeckCard, User } from './types';
+import { toast, Toaster } from 'sonner';
 
 export default function App() {
-  const [activeTab, setActiveTab] = React.useState('home');
+  const [activeTab, setActiveTab] = React.useState(() => (mockUser.role === 'client' ? 'create' : 'home'));
   const [user, setUser] = React.useState<User>(mockUser);
   const [products, setProducts] = React.useState<Product[]>(mockProducts);
   const [deck, setDeck] = React.useState<DeckCard[]>([]);
   const [searchQuery, setSearchQuery] = React.useState('');
+  const prevRoleRef = React.useRef(user.role);
 
-  // Filter products based on search
+  React.useEffect(() => {
+    if (prevRoleRef.current !== user.role) {
+      setActiveTab(user.role === 'client' ? 'create' : 'home');
+      prevRoleRef.current = user.role;
+    }
+  }, [user.role]);
+
   const filteredProducts = products.filter((product) =>
     product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     product.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
     product.producerName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const currentProducerId = user.producerId ?? 'current-user';
+  const producerProducts = React.useMemo(
+    () => products.filter((product) => product.producerId === currentProducerId),
+    [products, currentProducerId]
+  );
+  const producerOrders = React.useMemo(
+    () => mockGroupOrders.filter((order) => order.producerId === currentProducerId),
+    [currentProducerId]
+  );
+
   const handleAddToDeck = (product: Product) => {
     if (deck.find((card) => card.id === product.id)) {
-      toast.info('Ce produit est déjà dans votre deck');
+      toast.info('Ce produit est déjà dans votre sélection');
       return;
     }
+
     const newCard: DeckCard = {
       ...product,
       addedAt: new Date(),
     };
     setDeck([...deck, newCard]);
-    toast.success(`${product.name} ajouté à votre deck !`);
+    toast.success(`${product.name} ajouté à votre sélection !`);
   };
 
   const handleRemoveFromDeck = (productId: string) => {
     setDeck(deck.filter((card) => card.id !== productId));
-    toast.success('Produit retiré du deck');
+    toast.success('Produit retiré de votre sélection');
   };
 
   const handleCreateOrder = (orderData: any) => {
     console.log('Creating order:', orderData);
     toast.success('Commande créée avec succès !');
-    // Remove used products from deck
     const usedProductIds = orderData.products.map((p: Product) => p.id);
     setDeck(deck.filter((card) => !usedProductIds.includes(card.id)));
     setActiveTab('home');
@@ -63,107 +83,147 @@ export default function App() {
   };
 
   const handleUpdateUser = (userData: Partial<User>) => {
-    setUser({ ...user, ...userData });
+    const updatedUser = { ...user, ...userData };
+    if (userData.role === 'producer') {
+      updatedUser.producerId = updatedUser.producerId ?? 'current-user';
+    }
+    setUser(updatedUser);
     toast.success('Profil mis à jour !');
   };
 
-  const renderContent = () => {
+  const locationLabel = user.address?.split(',')[0] ?? 'votre quartier';
+  const canSaveProduct = user.role !== 'producer';
+  const swipeProducts = filteredProducts.length > 0 ? filteredProducts : products;
+
+  const renderProductGrid = () => {
+    if (filteredProducts.length === 0) {
+      return (
+        <div className="bg-white rounded-xl p-6 shadow-sm text-center">
+          <p className="text-sm text-[#6B7280]">Aucun produit ne correspond à votre recherche.</p>
+        </div>
+      );
+    }
+    return (
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
+        {filteredProducts.map((product) => (
+          <ProductCard
+            key={product.id}
+            product={product}
+            onAddToDeck={canSaveProduct ? handleAddToDeck : undefined}
+            inDeck={deck.some((card) => card.id === product.id)}
+            showAddButton={canSaveProduct}
+          />
+        ))}
+      </div>
+    );
+  };
+
+  const renderHomeContent = () => {
+    if (user.role === 'producer') {
+      return <ProducerProductsView products={producerProducts} />;
+    }
+    return renderProductGrid();
+  };
+
+  const renderDeckContent = () => {
+    if (user.role === 'producer') {
+      return <ProducerOrdersView orders={producerOrders} />;
+    }
+    return <DeckView deck={deck} onRemoveFromDeck={handleRemoveFromDeck} />;
+  };
+
+  const renderCreateContent = () => {
+    if (user.role === 'producer') {
+      return <AddProductForm onAddProduct={handleAddProduct} />;
+    }
+    if (user.role === 'client') {
+      return (
+        <ClientSwipeView
+          products={swipeProducts}
+          onSave={handleAddToDeck}
+          locationLabel={locationLabel}
+        />
+      );
+    }
+    return <CreateOrderForm deck={deck} onCreateOrder={handleCreateOrder} />;
+  };
+
+  const renderActiveContent = () => {
     switch (activeTab) {
       case 'home':
-        return (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {filteredProducts.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-                onAddToDeck={user.role === 'sharer' ? handleAddToDeck : undefined}
-                inDeck={deck.some((card) => card.id === product.id)}
-                showAddButton={user.role === 'sharer'}
-              />
-            ))}
-          </div>
-        );
-
+        return renderHomeContent();
       case 'deck':
-        return <DeckView deck={deck} onRemoveFromDeck={handleRemoveFromDeck} />;
-
+        return renderDeckContent();
       case 'create':
-        if (user.role === 'producer') {
-          return <AddProductForm onAddProduct={handleAddProduct} />;
-        } else if (user.role === 'sharer') {
-          return <CreateOrderForm deck={deck} onCreateOrder={handleCreateOrder} />;
-        } else {
-          return (
-            <div className="flex flex-col items-center justify-center py-20 px-4">
-              <div className="w-24 h-24 rounded-full bg-[#FFD166]/20 flex items-center justify-center mb-4">
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M24 8L28 16H20L24 8Z" fill="#FFD166"/>
-                  <path d="M24 40L28 32H20L24 40Z" fill="#FFD166"/>
-                </svg>
-              </div>
-              <h3 className="text-[#1F2937] mb-2">Explorez les produits</h3>
-              <p className="text-[#6B7280] text-center max-w-sm">
-                Découvrez les produits locaux et les commandes groupées près de chez vous
-              </p>
-            </div>
-          );
-        }
-
+        return renderCreateContent();
       case 'messages':
         return <MessagesView />;
-
       case 'profile':
         return <ProfileView user={user} onUpdateUser={handleUpdateUser} />;
-
       default:
         return null;
     }
   };
 
+  const getHomeHeading = () => {
+    if (user.role === 'client') {
+      return {
+        title: 'Rechercher',
+        subtitle: `Découvrez les produits autour de ${locationLabel}.`,
+      };
+    }
+    if (user.role === 'producer') {
+      return {
+        title: 'Vos produits',
+        subtitle: 'Gérez vos offres et préparez vos commandes partagées.',
+      };
+    }
+    return {
+      title: `Bonjour, ${user.name.split(' ')[0]}`,
+      subtitle: 'Créez des commandes groupées entre amis ou voisins.',
+    };
+  };
+
+  const getPageTitle = () => {
+    if (activeTab === 'deck') {
+      if (user.role === 'client') return 'Enregistré';
+      if (user.role === 'producer') return 'Commandes en cours';
+      return 'Votre sélection';
+    }
+    if (activeTab === 'create') {
+      if (user.role === 'client') return 'Swipe';
+      if (user.role === 'producer') return 'Produit';
+      return 'Nouvelle commande';
+    }
+    if (activeTab === 'messages') return 'Messages';
+    if (activeTab === 'profile') return 'Mon Profil';
+    return '';
+  };
+
+  const homeHeading = getHomeHeading();
+  const pageTitle = getPageTitle();
+
   return (
-    <div className="min-h-screen bg-[#F9FAFB]">
+    <div className="min-h-screen bg-[#F9F2E4]">
       <Toaster position="top-center" richColors />
-      
-      <Header 
-        showSearch={activeTab === 'home'} 
-        onSearch={setSearchQuery}
-      />
+      <Header showSearch={activeTab === 'home'} onSearch={setSearchQuery} />
 
       <main className="max-w-screen-xl mx-auto px-4 pt-20 pb-24">
-        {/* Page Title */}
-        {activeTab !== 'home' && (
-          <div className="mb-6">
-            <h1 className="text-[#1F2937]">
-              {activeTab === 'deck' && 'Mon Deck'}
-              {activeTab === 'create' && (user.role === 'producer' ? 'Ajouter un produit' : user.role === 'sharer' ? 'Nouvelle commande' : 'Explorer')}
-              {activeTab === 'messages' && 'Messages'}
-              {activeTab === 'profile' && 'Mon Profil'}
-            </h1>
-          </div>
-        )}
-
-        {/* Welcome Section for Home */}
-        {activeTab === 'home' && (
+        {activeTab === 'home' ? (
           <div className="mb-8">
-            <h1 className="text-[#1F2937] mb-2">
-              Bonjour, {user.name.split(' ')[0]} 👋
-            </h1>
-            <p className="text-[#6B7280]">
-              {user.role === 'producer' && 'Gérez vos produits et vos commandes'}
-              {user.role === 'sharer' && 'Créez des commandes groupées pour votre communauté'}
-              {user.role === 'client' && 'Découvrez les produits locaux près de chez vous'}
-            </p>
+            <h1 className="text-[#1F2937] mb-2">{homeHeading.title}</h1>
+            <p className="text-[#6B7280]">{homeHeading.subtitle}</p>
+          </div>
+        ) : (
+          <div className="mb-6">
+            <h1 className="text-[#1F2937]">{pageTitle}</h1>
           </div>
         )}
 
-        {renderContent()}
+        {renderActiveContent()}
       </main>
 
-      <Navigation 
-        activeTab={activeTab} 
-        onTabChange={setActiveTab}
-        userRole={user.role}
-      />
+      <Navigation activeTab={activeTab} onTabChange={setActiveTab} userRole={user.role} />
     </div>
   );
 }

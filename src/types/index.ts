@@ -7,6 +7,7 @@ export interface User {
   address?: string;
   verified?: boolean;
   businessStatus?: string;
+  producerId?: string;
 }
 
 export interface Product {
@@ -22,6 +23,8 @@ export interface Product {
   producerName: string;
   producerLocation: string;
   inStock: boolean;
+  measurement: 'unit' | 'kg';
+  weightKg?: number;
 }
 
 export interface DeckCard extends Product {

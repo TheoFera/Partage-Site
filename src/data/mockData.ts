@@ -6,6 +6,7 @@ export const mockUser: User = {
   role: 'sharer',
   address: '15 Rue de la République, 75001 Paris',
   verified: true,
+  producerId: 'current-user',
 };
 
 export const mockProducts: Product[] = [
@@ -18,10 +19,11 @@ export const mockProducts: Product[] = [
     quantity: 50,
     category: 'Légumes',
     imageUrl: 'https://images.unsplash.com/photo-1700064165267-8fa68ef07167?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxmcmVzaCUyMHRvbWF0b2VzfGVufDF8fHx8MTc2Mzk4NzU3MXww&ixlib=rb-4.1.0&q=80&w=1080',
-    producerId: 'p1',
-    producerName: 'Ferme des Trois Vallées',
-    producerLocation: '12 km',
+    producerId: 'current-user',
+    producerName: 'Ma Ferme',
+    producerLocation: '4 km',
     inStock: true,
+    measurement: 'kg',
   },
   {
     id: '2',
@@ -36,6 +38,7 @@ export const mockProducts: Product[] = [
     producerName: 'La Chèvrerie du Bois',
     producerLocation: '25 km',
     inStock: true,
+    measurement: 'unit',
   },
   {
     id: '3',
@@ -50,6 +53,7 @@ export const mockProducts: Product[] = [
     producerName: 'Verger du Plateau',
     producerLocation: '8 km',
     inStock: true,
+    measurement: 'kg',
   },
   {
     id: '4',
@@ -60,10 +64,11 @@ export const mockProducts: Product[] = [
     quantity: 20,
     category: 'Légumes',
     imageUrl: 'https://images.unsplash.com/photo-1579113800032-c38bd7635818?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxmcmVzaCUyMHZlZ2V0YWJsZXN8ZW58MXx8fHwxNzYzOTY4NTk0fDA&ixlib=rb-4.1.0&q=80&w=1080',
-    producerId: 'p1',
-    producerName: 'Ferme des Trois Vallées',
-    producerLocation: '12 km',
+    producerId: 'current-user',
+    producerName: 'Ma Ferme',
+    producerLocation: '4 km',
     inStock: true,
+    measurement: 'kg',
   },
   {
     id: '5',
@@ -78,6 +83,7 @@ export const mockProducts: Product[] = [
     producerName: 'Rucher des Collines',
     producerLocation: '18 km',
     inStock: true,
+    measurement: 'unit',
   },
   {
     id: '6',
@@ -92,18 +98,19 @@ export const mockProducts: Product[] = [
     producerName: 'Boulangerie du Village',
     producerLocation: '5 km',
     inStock: true,
+    measurement: 'unit',
   },
 ];
 
 export const mockGroupOrders: GroupOrder[] = [
   {
     id: '1',
-    title: 'Commande Ferme des Trois Vallées',
+    title: 'Commande Ma Ferme',
     sharerId: '1',
     sharerName: 'Marie Dupont',
     products: [mockProducts[0], mockProducts[3]],
-    producerId: 'p1',
-    producerName: 'Ferme des Trois Vallées',
+    producerId: 'current-user',
+    producerName: 'Ma Ferme',
     sharerPercentage: 10,
     minWeight: 5,
     maxWeight: 20,

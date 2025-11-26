@@ -14,6 +14,7 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
   const [quantity, setQuantity] = React.useState('');
   const [category, setCategory] = React.useState('Légumes');
   const [imageUrl, setImageUrl] = React.useState('');
+  const [measurement, setMeasurement] = React.useState<'kg' | 'unit'>('kg');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,18 +25,21 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
       unit,
       quantity: parseInt(quantity),
       category,
-      imageUrl: imageUrl || 'https://images.unsplash.com/photo-1579113800032-c38bd7635818?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxmcmVzaCUyMHZlZ2V0YWJsZXN8ZW58MXx8fHwxNzYzOTY4NTk0fDA&ixlib=rb-4.1.0&q=80&w=1080',
+      imageUrl:
+        imageUrl ||
+        'https://images.unsplash.com/photo-1579113800032-c38bd7635818?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxmcmVzaCUyMHZlZ2V0YWJsZXN8ZW58MXx8fHwxNzYzOTY4NTk0fDA&ixlib=rb-4.1.0&q=80&w=1080',
       producerId: 'current-user',
       producerName: 'Ma Ferme',
       producerLocation: 'À proximité',
       inStock: true,
+      measurement,
     });
-    // Reset form
     setName('');
     setDescription('');
     setPrice('');
     setQuantity('');
     setImageUrl('');
+    setMeasurement('kg');
   };
 
   return (
@@ -44,16 +48,11 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
         <h2 className="text-[#1F2937] mb-6">Ajouter un produit</h2>
 
         <div className="space-y-4">
-          {/* Image Upload */}
           <div>
-            <label className="block text-sm text-[#6B7280] mb-2">
-              Photo du produit
-            </label>
+            <label className="block text-sm text-[#6B7280] mb-2">Photo du produit</label>
             <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-[#FF6B4A] transition-colors">
               <Upload className="w-10 h-10 text-[#6B7280] mx-auto mb-2" />
-              <p className="text-sm text-[#6B7280] mb-2">
-                Cliquez pour télécharger ou glissez une image
-              </p>
+              <p className="text-sm text-[#6B7280] mb-2">Cliquez pour télécharger ou glissez une image</p>
               <input
                 type="text"
                 value={imageUrl}
@@ -64,11 +63,8 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
             </div>
           </div>
 
-          {/* Product Name */}
           <div>
-            <label className="block text-sm text-[#6B7280] mb-2">
-              Nom du produit *
-            </label>
+            <label className="block text-sm text-[#6B7280] mb-2">Nom du produit *</label>
             <input
               type="text"
               value={name}
@@ -79,11 +75,8 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
             />
           </div>
 
-          {/* Description */}
           <div>
-            <label className="block text-sm text-[#6B7280] mb-2">
-              Description
-            </label>
+            <label className="block text-sm text-[#6B7280] mb-2">Description</label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -93,11 +86,8 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
             />
           </div>
 
-          {/* Category */}
           <div>
-            <label className="block text-sm text-[#6B7280] mb-2">
-              Catégorie *
-            </label>
+            <label className="block text-sm text-[#6B7280] mb-2">Catégorie *</label>
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
@@ -113,12 +103,9 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
             </select>
           </div>
 
-          {/* Price and Unit */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm text-[#6B7280] mb-2">
-                Prix (€) *
-              </label>
+              <label className="block text-sm text-[#6B7280] mb-2">Prix (€) *</label>
               <input
                 type="number"
                 step="0.01"
@@ -131,9 +118,20 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
             </div>
 
             <div>
-              <label className="block text-sm text-[#6B7280] mb-2">
-                Unité *
-              </label>
+              <label className="block text-sm text-[#6B7280] mb-2">Mesure *</label>
+              <select
+                value={measurement}
+                onChange={(e) => setMeasurement(e.target.value as 'kg' | 'unit')}
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                required
+              >
+                <option value="kg">Au kilo</option>
+                <option value="unit">À l'unité</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm text-[#6B7280] mb-2">Unité *</label>
               <select
                 value={unit}
                 onChange={(e) => setUnit(e.target.value)}
@@ -149,11 +147,8 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
             </div>
           </div>
 
-          {/* Quantity */}
           <div>
-            <label className="block text-sm text-[#6B7280] mb-2">
-              Quantité disponible *
-            </label>
+            <label className="block text-sm text-[#6B7280] mb-2">Quantité disponible *</label>
             <input
               type="number"
               value={quantity}
@@ -165,7 +160,6 @@ export function AddProductForm({ onAddProduct }: AddProductFormProps) {
           </div>
         </div>
 
-        {/* Submit Button */}
         <button
           type="submit"
           className="w-full mt-6 py-3 bg-[#FF6B4A] text-white rounded-xl hover:bg-[#FF5A39] transition-colors shadow-lg"

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Layers, PlusSquare, User, MessageCircle } from 'lucide-react';
+import { Home, Layers, PlusSquare, User, MessageCircle, Search, Heart, Shuffle } from 'lucide-react';
 
 interface NavigationProps {
   activeTab: string;
@@ -8,6 +8,30 @@ interface NavigationProps {
 }
 
 export function Navigation({ activeTab, onTabChange, userRole }: NavigationProps) {
+  const firstIcon = userRole === 'client' ? Search : Home;
+  const firstLabel =
+    userRole === 'client'
+      ? 'Rechercher'
+      : userRole === 'producer'
+      ? 'Vos produits'
+      : 'Produits';
+
+  const secondIcon = userRole === 'client' ? Heart : Layers;
+  const secondLabel =
+    userRole === 'client'
+      ? 'Enregistré'
+      : userRole === 'producer'
+      ? 'Commandes en cours'
+      : 'Votre sélection';
+
+  const centerIcon = userRole === 'client' ? Shuffle : PlusSquare;
+  const centerLabel =
+    userRole === 'client'
+      ? 'Swipe'
+      : userRole === 'producer'
+      ? '+ produit'
+      : 'Commande';
+
   return (
     <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">
       <div className="max-w-screen-xl mx-auto px-4">
@@ -20,32 +44,28 @@ export function Navigation({ activeTab, onTabChange, userRole }: NavigationProps
                 : 'text-[#6B7280] hover:text-[#FF6B4A]'
             }`}
           >
-            <Home className="w-6 h-6" />
-            <span className="text-xs">Accueil</span>
+            {React.createElement(firstIcon, { className: 'w-6 h-6' })}
+            <span className="text-xs">{firstLabel}</span>
           </button>
 
-          {userRole === 'sharer' && (
-            <button
-              onClick={() => onTabChange('deck')}
-              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-lg transition-colors ${
-                activeTab === 'deck'
-                  ? 'text-[#FF6B4A]'
-                  : 'text-[#6B7280] hover:text-[#FF6B4A]'
-              }`}
-            >
-              <Layers className="w-6 h-6" />
-              <span className="text-xs">Mon Deck</span>
-            </button>
-          )}
+          <button
+            onClick={() => onTabChange('deck')}
+            className={`flex flex-col items-center gap-1 px-4 py-2 rounded-lg transition-colors ${
+              activeTab === 'deck'
+                ? 'text-[#FF6B4A]'
+                : 'text-[#6B7280] hover:text-[#FF6B4A]'
+            }`}
+          >
+            {React.createElement(secondIcon, { className: 'w-6 h-6' })}
+            <span className="text-xs">{secondLabel}</span>
+          </button>
 
           <button
             onClick={() => onTabChange('create')}
             className="flex flex-col items-center gap-1 px-4 py-2 rounded-lg bg-[#FF6B4A] text-white shadow-lg -mt-6"
           >
-            <PlusSquare className="w-7 h-7" />
-            <span className="text-xs">
-              {userRole === 'producer' ? 'Produit' : userRole === 'sharer' ? 'Commande' : 'Explorer'}
-            </span>
+            {React.createElement(centerIcon, { className: 'w-7 h-7' })}
+            <span className="text-xs">{centerLabel}</span>
           </button>
 
           <button

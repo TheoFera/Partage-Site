@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- Branches -->
+  <g fill="none" stroke="#FF6D4D" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="60" y1="100" x2="140" y2="40" />
+    <line x1="60" y1="100" x2="140" y2="160" />
+  </g>
+
+  <!-- Trois ronds (plus gros) -->
+  <g fill="#FF6D4D">
+    <circle cx="60"  cy="100" r="34" />
+    <circle cx="140" cy="40"  r="34" />
+    <circle cx="140" cy="160" r="34" />
+  </g>
+</svg>

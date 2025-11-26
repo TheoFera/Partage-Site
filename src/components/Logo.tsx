@@ -3,13 +3,24 @@ import React from 'react';
 export function Logo({ className = '' }: { className?: string }) {
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="10" cy="10" r="4" fill="#FF6B4A"/>
-        <circle cx="22" cy="10" r="4" fill="#FF6B4A"/>
-        <circle cx="16" cy="22" r="4" fill="#FF6B4A"/>
-        <line x1="10" y1="10" x2="16" y2="22" stroke="#FF6B4A" strokeWidth="3" strokeLinecap="round"/>
-        <line x1="22" y1="10" x2="16" y2="22" stroke="#FF6B4A" strokeWidth="3" strokeLinecap="round"/>
-        <line x1="10" y1="10" x2="22" y2="10" stroke="#FF6B4A" strokeWidth="3" strokeLinecap="round"/>
+      <svg viewBox="0 0 200 200" className="w-10 h-10" aria-hidden="true">
+        <g
+          fill="none"
+          stroke="#FF6D4D"
+          strokeWidth="20"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <line x1="60" y1="100" x2="140" y2="40" />
+          <line x1="60" y1="100" x2="140" y2="160" />
+        </g>
+
+        {/* Trois ronds (plus gros) */}
+        <g fill="#FF6D4D">
+          <circle cx="60" cy="100" r="34" />
+          <circle cx="140" cy="40" r="34" />
+          <circle cx="140" cy="160" r="34" />
+        </g>
       </svg>
       <span className="font-['Fredoka'] text-[#FF6B4A]" style={{ fontSize: '1.5rem', fontWeight: 600 }}>
         Partage

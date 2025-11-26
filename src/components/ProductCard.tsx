@@ -67,6 +67,9 @@ export function ProductCard({ product, onAddToDeck, inDeck = false, showAddButto
               {product.price.toFixed(2)} €
             </p>
             <p className="text-xs text-[#6B7280]">{product.unit}</p>
+            <span className="inline-flex items-center text-xs text-[#1F2937] bg-[#F9FAFB] border border-gray-200 px-2 py-0.5 rounded-full mt-1">
+              {product.measurement === 'kg' ? 'Au kilo' : "À l'unité"}
+            </span>
           </div>
           <div className="flex items-center gap-3">
             {product.inStock ? (

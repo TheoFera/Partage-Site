@@ -33,7 +33,6 @@ export function ProfileView({ user, onUpdateUser }: ProfileViewProps) {
 
   return (
     <div className="space-y-6 pb-6">
-      {/* Profile Header */}
       <div className="bg-white rounded-xl p-6 shadow-sm">
         <div className="flex items-start justify-between mb-6">
           <div className="flex items-center gap-4">
@@ -65,19 +64,16 @@ export function ProfileView({ user, onUpdateUser }: ProfileViewProps) {
             </div>
           </div>
           <button
-            onClick={() => isEditing ? handleSave() : setIsEditing(true)}
+            onClick={() => (isEditing ? handleSave() : setIsEditing(true))}
             className="p-2 hover:bg-[#F9FAFB] rounded-lg transition-colors"
           >
             <Edit2 className="w-5 h-5 text-[#6B7280]" />
           </button>
         </div>
 
-        {/* Role Selection */}
         {isEditing && (
           <div className="mb-6">
-            <label className="block text-sm text-[#6B7280] mb-2">
-              Type de compte
-            </label>
+            <label className="block text-sm text-[#6B7280] mb-2">Type de compte</label>
             <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
@@ -116,7 +112,6 @@ export function ProfileView({ user, onUpdateUser }: ProfileViewProps) {
           </div>
         )}
 
-        {/* Address */}
         <div className="space-y-4">
           <div>
             <div className="flex items-center gap-2 text-sm text-[#6B7280] mb-2">
@@ -132,15 +127,12 @@ export function ProfileView({ user, onUpdateUser }: ProfileViewProps) {
                 className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
               />
             ) : (
-              <p className="text-[#1F2937] pl-6">
-                {user.address || 'Aucune adresse renseignée'}
-              </p>
+              <p className="text-[#1F2937] pl-6">{user.address || 'Aucune adresse renseignée'}</p>
             )}
           </div>
         </div>
       </div>
 
-      {/* Verification Section */}
       <div className="bg-white rounded-xl p-6 shadow-sm">
         <div className="flex items-start gap-3 mb-4">
           <Shield className="w-5 h-5 text-[#28C1A5] mt-1" />
@@ -148,8 +140,8 @@ export function ProfileView({ user, onUpdateUser }: ProfileViewProps) {
             <h3 className="text-[#1F2937] mb-1">Vérification d'identité</h3>
             <p className="text-sm text-[#6B7280]">
               {user.verified
-                ? 'Votre identité a été vérifiée ✓'
-                : 'Vérifiez votre identité pour gagner la confiance de la communauté'}
+                ? 'Votre identité a été vérifiée.'
+                : 'Vérifiez votre identité pour rassurer vos amis ou voisins sur vos commandes groupées.'}
             </p>
           </div>
         </div>
@@ -160,7 +152,6 @@ export function ProfileView({ user, onUpdateUser }: ProfileViewProps) {
         )}
       </div>
 
-      {/* Business Status */}
       {role === 'sharer' && (
         <div className="bg-white rounded-xl p-6 shadow-sm">
           <div className="flex items-start gap-3 mb-4">
@@ -185,20 +176,25 @@ export function ProfileView({ user, onUpdateUser }: ProfileViewProps) {
         </div>
       )}
 
-      {/* Stats Section */}
       <div className="bg-white rounded-xl p-6 shadow-sm">
         <h3 className="text-[#1F2937] mb-4">Mes statistiques</h3>
         <div className="grid grid-cols-3 gap-4">
           <div className="text-center">
-            <p className="text-2xl text-[#FF6B4A]" style={{ fontWeight: 600 }}>12</p>
+            <p className="text-2xl text-[#FF6B4A]" style={{ fontWeight: 600 }}>
+              12
+            </p>
             <p className="text-sm text-[#6B7280]">Commandes</p>
           </div>
           <div className="text-center">
-            <p className="text-2xl text-[#28C1A5]" style={{ fontWeight: 600 }}>8</p>
+            <p className="text-2xl text-[#28C1A5]" style={{ fontWeight: 600 }}>
+              8
+            </p>
             <p className="text-sm text-[#6B7280]">Partagées</p>
           </div>
           <div className="text-center">
-            <p className="text-2xl text-[#FFD166]" style={{ fontWeight: 600 }}>4.8</p>
+            <p className="text-2xl text-[#FFD166]" style={{ fontWeight: 600 }}>
+              4.8
+            </p>
             <p className="text-sm text-[#6B7280]">Note</p>
           </div>
         </div>

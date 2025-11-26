@@ -14,21 +14,20 @@ export function DeckView({ deck, onRemoveFromDeck }: DeckViewProps) {
       <div className="flex flex-col items-center justify-center py-20 px-4">
         <div className="w-24 h-24 rounded-full bg-[#FFD166]/20 flex items-center justify-center mb-4">
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M24 8L28 16H20L24 8Z" fill="#FFD166"/>
-            <path d="M24 40L28 32H20L24 40Z" fill="#FFD166"/>
-            <path d="M8 24L16 28V20L8 24Z" fill="#FFD166"/>
-            <path d="M40 24L32 28V20L40 24Z" fill="#FFD166"/>
+            <path d="M24 8L28 16H20L24 8Z" fill="#FFD166" />
+            <path d="M24 40L28 32H20L24 40Z" fill="#FFD166" />
+            <path d="M8 24L16 28V20L8 24Z" fill="#FFD166" />
+            <path d="M40 24L32 28V20L40 24Z" fill="#FFD166" />
           </svg>
         </div>
-        <h3 className="text-[#1F2937] mb-2">Votre deck est vide</h3>
+        <h3 className="text-[#1F2937] mb-2">Votre sélection est vide</h3>
         <p className="text-[#6B7280] text-center max-w-sm">
-          Ajoutez des produits à votre deck depuis le feed pour créer une commande groupée
+          Ajoutez des produits à votre sélection pour créer une commande groupée entre amis ou voisins.
         </p>
       </div>
     );
   }
 
-  // Group products by producer
   const groupedByProducer = deck.reduce((acc, card) => {
     const producerId = card.producerId;
     if (!acc[producerId]) {
@@ -45,7 +44,7 @@ export function DeckView({ deck, onRemoveFromDeck }: DeckViewProps) {
     <div className="space-y-6">
       <div className="bg-[#FFD166]/10 border border-[#FFD166]/30 rounded-xl p-4">
         <p className="text-sm text-[#1F2937]">
-          💡 <span style={{ fontWeight: 500 }}>Astuce:</span> Vous ne pouvez créer une commande qu'avec des produits du même producteur. Glissez les cartes pour créer votre commande !
+          💡 <span style={{ fontWeight: 500 }}>Astuce :</span> Vous ne pouvez créer une commande qu'avec des produits du même producteur. Glissez les cartes pour préparer votre commande !
         </p>
       </div>
 
