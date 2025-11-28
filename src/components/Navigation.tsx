@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Layers, PlusSquare, User, MessageCircle, Search, Heart, Shuffle } from 'lucide-react';
+import { PlusSquare, User, MessageCircle, Search, Shuffle, MapPin } from 'lucide-react';
 
 interface NavigationProps {
   activeTab: string;
@@ -8,28 +8,18 @@ interface NavigationProps {
 }
 
 export function Navigation({ activeTab, onTabChange, userRole }: NavigationProps) {
-  const firstIcon = userRole === 'client' ? Search : Home;
-  const firstLabel =
-    userRole === 'client'
-      ? 'Rechercher'
-      : userRole === 'producer'
-      ? 'Vos produits'
-      : 'Produits';
+  const firstIcon = Search;
+  const firstLabel = 'Produits';
 
-  const secondIcon = userRole === 'client' ? Heart : Layers;
-  const secondLabel =
-    userRole === 'client'
-      ? 'Enregistré'
-      : userRole === 'producer'
-      ? 'Commandes en cours'
-      : 'Votre sélection';
+  const secondIcon = MapPin;
+  const secondLabel = 'Carte';
 
   const centerIcon = userRole === 'client' ? Shuffle : PlusSquare;
   const centerLabel =
     userRole === 'client'
-      ? 'Swipe'
+      ? 'Decouvrir'
       : userRole === 'producer'
-      ? '+ produit'
+      ? 'Produit'
       : 'Commande';
 
   return (

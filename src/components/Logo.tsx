@@ -1,8 +1,15 @@
 import React from 'react';
 
-export function Logo({ className = '' }: { className?: string }) {
+export function Logo({ className = '', onClick }: { className?: string; onClick?: () => void }) {
+  const Wrapper: React.ElementType = onClick ? 'button' : 'div';
+
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <Wrapper
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      className={`flex items-center gap-2 ${className}`}
+      aria-label={onClick ? 'Aller vers les produits' : undefined}
+    >
       <svg viewBox="0 0 200 200" className="w-10 h-10" aria-hidden="true">
         <g
           fill="none"
@@ -25,6 +32,6 @@ export function Logo({ className = '' }: { className?: string }) {
       <span className="font-['Fredoka'] text-[#FF6B4A]" style={{ fontSize: '1.5rem', fontWeight: 600 }}>
         Partage
       </span>
-    </div>
+    </Wrapper>
   );
 }

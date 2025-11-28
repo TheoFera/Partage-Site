@@ -5,9 +5,10 @@ import { Bell, Search } from 'lucide-react';
 interface HeaderProps {
   showSearch?: boolean;
   onSearch?: (query: string) => void;
+  onLogoClick?: () => void;
 }
 
-export function Header({ showSearch = false, onSearch }: HeaderProps) {
+export function Header({ showSearch = false, onSearch, onLogoClick }: HeaderProps) {
   const [searchQuery, setSearchQuery] = React.useState('');
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -19,7 +20,7 @@ export function Header({ showSearch = false, onSearch }: HeaderProps) {
     <header className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 z-50">
       <div className="max-w-screen-xl mx-auto px-4 py-3">
         <div className="flex items-center justify-between gap-4">
-          <Logo />
+          <Logo onClick={onLogoClick} className={onLogoClick ? 'cursor-pointer' : ''} />
           
           {showSearch && (
             <div className="flex-1 max-w-md relative">

@@ -369,6 +369,19 @@
   button, input, textarea, select {
     font-family: Inter, system-ui, sans-serif;
   }
+
+  /* Show a pointer cursor on interactive elements */
+  a,
+  button:not(:disabled),
+  [role='button'],
+  input[type='checkbox'],
+  input[type='radio'],
+  label,
+  select,
+  summary,
+  .clickable {
+    cursor: pointer;
+  }
 }
 
 @layer utilities {

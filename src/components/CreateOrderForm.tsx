@@ -29,6 +29,7 @@ const defaultSlots: PickupSlot[] = [
 export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
   const [selectedProducts, setSelectedProducts] = React.useState<string[]>([]);
   const [title, setTitle] = React.useState('');
+  const [visibility, setVisibility] = React.useState<'public' | 'private'>('public');
   const [sharerPercentage, setSharerPercentage] = React.useState(10);
   const [minWeight, setMinWeight] = React.useState(5);
   const [maxWeight, setMaxWeight] = React.useState(20);
@@ -111,11 +112,12 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
 
     const activeSlots = pickupSlots
       .filter((slot) => slot.enabled)
-      .map((slot) => ({ day: slot.day, start: slot.start, end: slot.end }));
+      .map((slot) => ({ day: slot.day, label: slot.label, start: slot.start, end: slot.end }));
 
     onCreateOrder({
       title,
       products: selectedProductsData,
+      visibility,
       sharerPercentage,
       minWeight,
       maxWeight,
@@ -187,6 +189,37 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
                   />
                 </div>
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm text-[#6B7280] mb-2">Visibilité de la commande</label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVisibility('public')}
+                  className={`flex-1 min-w-[160px] px-4 py-2 rounded-lg border-2 text-sm transition-colors ${
+                    visibility === 'public'
+                      ? 'border-[#28C1A5] bg-[#28C1A5]/10 text-[#0F5132]'
+                      : 'border-gray-200 text-[#1F2937] hover:border-[#FFD166]'
+                  }`}
+                >
+                  Commande publique
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisibility('private')}
+                  className={`flex-1 min-w-[160px] px-4 py-2 rounded-lg border-2 text-sm transition-colors ${
+                    visibility === 'private'
+                      ? 'border-[#FF6B4A] bg-[#FF6B4A]/10 text-[#B45309]'
+                      : 'border-gray-200 text-[#1F2937] hover:border-[#FFD166]'
+                  }`}
+                >
+                  Commande privée
+                </button>
+              </div>
+              <p className="text-xs text-[#6B7280] mt-2">
+                Les commandes privées restent visibles uniquement dans votre profil.
+              </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

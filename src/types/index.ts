@@ -46,6 +46,19 @@ export interface GroupOrder {
   pickupAddress: string;
   message: string;
   status: 'open' | 'closed' | 'completed';
+  visibility: 'public' | 'private';
   totalValue: number;
   participants: number;
+  pickupSlots?: Array<{
+    day: string;
+    start?: string;
+    end?: string;
+    label?: string;
+  }>;
+  mapLocation?: {
+    lat: number;
+    lng: number;
+    radiusMeters: number;
+    areaLabel: string;
+  };
 }
