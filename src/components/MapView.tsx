@@ -146,6 +146,7 @@ export function MapView({ orders, deck, onRemoveFromDeck, locationLabel, userRol
       mapRef.current = L.map(mapContainerRef.current, {
         zoomControl: false,
         worldCopyJump: true,
+        attributionControl: false, // Hide default attribution box
       }).setView([mapCenter.lat, mapCenter.lng], 13);
 
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {

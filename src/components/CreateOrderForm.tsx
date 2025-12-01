@@ -143,7 +143,7 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
         </div>
         <h3 className="text-[#1F2937] mb-2">Votre sélection est vide</h3>
         <p className="text-[#6B7280] text-center max-w-sm">
-          Ajoutez des produits à votre sélection depuis le feed pour créer une commande groupée.
+          Ajoutez des produits à votre sélection depuis l'onglet Produits ou depuis la page des producteurs pour créer une commande groupée.
         </p>
       </div>
     );

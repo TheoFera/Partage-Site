@@ -21,6 +21,7 @@ export default function App() {
   const [deck, setDeck] = React.useState<DeckCard[]>([]);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [activeOrderId, setActiveOrderId] = React.useState<string | null>(null);
+  const [profileMode, setProfileMode] = React.useState<'view' | 'edit'>('view');
   const prevRoleRef = React.useRef(user.role);
   const lastTabRef = React.useRef<string | null>(null);
 
@@ -28,6 +29,9 @@ export default function App() {
     setActiveOrderId(null);
     lastTabRef.current = null;
     setActiveTab(tab);
+    if (tab !== 'profile') {
+      setProfileMode('view');
+    }
   };
 
   const openOrderView = (orderId: string) => {
@@ -52,11 +56,35 @@ export default function App() {
     }
   }, [user.role]);
 
-  const filteredProducts = products.filter((product) =>
-    product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    product.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    product.producerName.toLowerCase().includes(searchQuery.toLowerCase())
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const matchesSearch = React.useCallback(
+    (product: Product) => {
+      if (!normalizedSearch) return true;
+      return (
+        product.name.toLowerCase().includes(normalizedSearch) ||
+        product.description.toLowerCase().includes(normalizedSearch) ||
+        product.producerName.toLowerCase().includes(normalizedSearch)
+      );
+    },
+    [normalizedSearch]
   );
+
+  const filteredProducts = React.useMemo(
+    () => (normalizedSearch ? products.filter(matchesSearch) : products),
+    [matchesSearch, normalizedSearch, products]
+  );
+
+  const filteredMapOrders = React.useMemo(() => {
+    if (!normalizedSearch) return groupOrders;
+
+    return groupOrders
+      .map((order) => {
+        const matchingProducts = order.products.filter(matchesSearch);
+        if (!matchingProducts.length) return null;
+        return { ...order, products: matchingProducts };
+      })
+      .filter((order): order is GroupOrder => Boolean(order));
+  }, [groupOrders, matchesSearch, normalizedSearch]);
 
   const currentProducerId =
     user.role === 'producer' ? user.producerId ?? 'current-user' : user.producerId ?? '';
@@ -161,7 +189,7 @@ export default function App() {
     };
 
     setGroupOrders((prev) => [newOrder, ...prev]);
-    toast.success('Commande créée avec succès !');
+    toast.success('Commande créée avec succés !');
     const usedProductIds = orderData.products.map((p: Product) => p.id);
     setDeck(deck.filter((card) => !usedProductIds.includes(card.id)));
     openOrderView(newOrder.id);
@@ -173,7 +201,7 @@ export default function App() {
       id: `product-${Date.now()}`,
     };
     setProducts([newProduct, ...products]);
-    toast.success('Produit ajouté avec succès !');
+    toast.success('Produit ajouté avec succés !');
     changeTab('home');
   };
 
@@ -186,10 +214,18 @@ export default function App() {
     toast.success('Profil mis à jour !');
   };
 
+  const handleEditProfile = () => {
+    changeTab('profile');
+    setProfileMode('edit');
+  };
+
+  const handleShareProfile = () => {
+    toast.success('Lien du profil copie !');
+  };
+
   const locationLabel = user.address?.split(',')[0] ?? 'votre quartier';
   const canSaveProduct = user.role !== 'producer';
   const swipeProducts = publicOrderProducts;
-
   const renderProductGrid = () => {
     if (filteredProducts.length === 0) {
       return (
@@ -216,7 +252,7 @@ export default function App() {
   const renderDeckContent = () => {
     return (
       <MapView
-        orders={groupOrders}
+        orders={filteredMapOrders}
         deck={deck}
         onRemoveFromDeck={handleRemoveFromDeck}
         locationLabel={locationLabel}
@@ -272,6 +308,9 @@ export default function App() {
             orders={profileOrders}
             producerOrders={producerOrders}
             isOwnProfile
+            mode={profileMode}
+            onModeChange={setProfileMode}
+            onShareProfile={handleShareProfile}
             onUpdateUser={handleUpdateUser}
             onRemoveFromDeck={handleRemoveFromDeck}
             onOpenOrder={openOrderView}
@@ -306,17 +345,41 @@ export default function App() {
   const homeHeading = getHomeHeading();
   const pageTitle = getPageTitle();
   const isOrderView = Boolean(selectedOrder);
+  // Extra bottom padding ensures content isn't hidden behind the fixed bottom navigation
+  const mainPadding = isOrderView ? 'pt-24 pb-24' : 'pt-20 pb-24';
+  const mainPaddingBottom = isOrderView ? '12rem' : '10rem';
+  const headerActions =
+    activeTab === 'profile' && !isOrderView ? (
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleEditProfile}
+          className="px-3 py-2 rounded-full bg-[#FF6B4A] text-white text-sm font-semibold shadow-sm hover:bg-[#FF5A39] transition-colors"
+        >
+          Modifier le profil
+        </button>
+        <button
+          onClick={handleShareProfile}
+          className="px-3 py-2 rounded-full bg-white border border-[#FF6B4A] text-[#FF6B4A] text-sm font-semibold hover:bg-[#FFF1E6] transition-colors"
+        >
+          Partager
+        </button>
+      </div>
+    ) : null;
 
   return (
-    <div className="min-h-screen bg-[#F9F2E4]">
+    <div className="min-h-screen bg-[#F9F2E4] overflow-x-hidden">
       <Toaster position="top-center" richColors />
       <Header
-        showSearch={activeTab === 'home' && !isOrderView}
+        showSearch={(activeTab === 'home' || activeTab === 'deck') && !isOrderView}
         onSearch={setSearchQuery}
         onLogoClick={() => changeTab('home')}
+        actions={headerActions}
       />
 
-      <main className="max-w-screen-xl mx-auto px-4 pt-20 pb-24">
+      <main
+        className={`max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-10 ${mainPadding}`}
+        style={{ paddingBottom: mainPaddingBottom }}
+      >
         {isOrderView ? (
           <div className="mb-6">
             <h1 className="text-[#1F2937]">Vue client</h1>

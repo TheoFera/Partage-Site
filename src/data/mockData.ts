@@ -3,8 +3,15 @@ import { Product, GroupOrder, User } from '../types';
 export const mockUser: User = {
   id: '1',
   name: 'Marie Dupont',
+  handle: 'mariedupont',
   role: 'sharer',
-  address: '15 Rue de la République, 75001 Paris',
+  address: '15 Rue de la Republique, 75001 Paris',
+  addressVisibility: 'public',
+  profileVisibility: 'public',
+  tagline: 'Partageuse engagee pour des produits locaux et solidaires.',
+  website: 'https://marie-partages.fr',
+  profileImage:
+    'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=400&q=80',
   verified: true,
   producerId: 'current-user',
 };

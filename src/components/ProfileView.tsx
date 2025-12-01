@@ -1,5 +1,5 @@
 import React from 'react';
-import { MapPin, Shield, Grid, Bookmark, ShoppingBag, X, Check, Sparkles } from 'lucide-react';
+import { MapPin, Shield, Grid, Bookmark, ShoppingBag, X, Check, Sparkles, Globe, Lock, Link2, Upload } from 'lucide-react';
 import { DeckCard, GroupOrder, Product, User } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
@@ -18,6 +18,9 @@ interface ProfileViewProps {
   orders: GroupOrder[];
   producerOrders: GroupOrder[];
   isOwnProfile?: boolean;
+  mode?: 'view' | 'edit';
+  onModeChange?: (mode: 'view' | 'edit') => void;
+  onShareProfile?: () => void;
   onUpdateUser: (user: Partial<User>) => void;
   onRemoveFromDeck: (productId: string) => void;
   onOpenOrder?: (orderId: string) => void;
@@ -30,12 +33,24 @@ export function ProfileView({
   producerOrders,
   orders,
   isOwnProfile = true,
+  mode: modeProp,
+  onModeChange,
+  onShareProfile,
   onUpdateUser,
   onRemoveFromDeck,
   onOpenOrder,
 }: ProfileViewProps) {
-  const [mode, setMode] = React.useState<'view' | 'edit'>('view');
+  const [internalMode, setInternalMode] = React.useState<'view' | 'edit'>('view');
+  const mode = modeProp ?? internalMode;
+  const setMode = onModeChange ?? setInternalMode;
   const [activeTab, setActiveTab] = React.useState<TabKey>('orders');
+  const profileHandle = user.handle ?? user.name.toLowerCase().replace(/\s+/g, '');
+  const profileVisibility = user.profileVisibility ?? 'public';
+  const addressVisibility = user.addressVisibility ?? 'public';
+  const isProfilePublic = profileVisibility === 'public';
+  const canShowAddress = isOwnProfile || addressVisibility === 'public';
+  const addressLabel = canShowAddress ? user.address || 'Adresse non renseignee' : 'Adresse masquee';
+  const profileTagline = user.tagline ?? '';
 
   const orderCards = React.useMemo(() => {
     const mergedMap = new Map<string, GroupOrder>();
@@ -157,7 +172,7 @@ export function ProfileView({
       ) : (
         <EmptyState
           title="Aucune commande"
-          subtitle="Vos commandes passees et actives apparaitront ici."
+          subtitle="Vos commandes passées et actives apparaitront ici."
         />
       );
     }
@@ -181,7 +196,7 @@ export function ProfileView({
       ) : (
         <EmptyState
           title="Aucune sélection"
-          subtitle="Sauvegardez un produit depuis le feed ou le swipe pour le retrouver ici."
+          subtitle="Sauvegardez un produit depuis les produits ou le swipe pour le retrouver ici."
         />
       );
     }
@@ -190,14 +205,24 @@ export function ProfileView({
   };
 
   return (
-    <div className="space-y-10 pb-24">
+    <div className="space-y-8 md:space-y-10 pb-24">
       <div className="bg-white text-[#1F2937] rounded-2xl p-6 md:p-8 shadow-sm border border-gray-100 relative space-y-6">
         <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
           <div className="flex items-center gap-4">
-            <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#FF6B4A] to-[#FFD166] flex items-center justify-center text-3xl font-semibold shadow-lg ring-4 ring-[#FFE8D7] flex-shrink-0">
-              {user.name.charAt(0)}
+            <div className="w-24 h-24 rounded-full ring-4 ring-[#FFE8D7] shadow-lg overflow-hidden flex-shrink-0 bg-gradient-to-br from-[#FF6B4A] to-[#FFD166]">
+              {user.profileImage ? (
+                <ImageWithFallback
+                  src={user.profileImage}
+                  alt={user.name}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-3xl font-semibold text-white">
+                  {user.name.charAt(0)}
+                </div>
+              )}
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <h2 className="text-2xl font-semibold">{user.name}</h2>
                 {user.verified && (
@@ -207,33 +232,51 @@ export function ProfileView({
                   </span>
                 )}
               </div>
-              <p className="text-sm text-[#6B7280]">@{user.name.toLowerCase().replace(/\s+/g, '')}</p>
+              <p className="text-sm text-[#6B7280]">@{profileHandle}</p>
+              {profileTagline && <p className="text-sm text-[#374151]">{profileTagline}</p>}
               <div className="flex items-center gap-2 text-sm text-[#6B7280]">
                 <MapPin className="w-4 h-4" />
-                <span>{user.address || 'Adresse non renseignee'}</span>
+                <span>{addressLabel}</span>
+                {!canShowAddress && <Lock className="w-4 h-4 text-[#9CA3AF]" />}
               </div>
+              {(user.website || isOwnProfile) && (
+                <div className="flex items-center gap-2 text-sm text-[#6B7280]">
+                  <Link2 className="w-4 h-4" />
+                  {user.website ? (
+                    <a href={user.website} className="text-[#FF6B4A] hover:underline" target="_blank" rel="noreferrer">
+                      {user.website}
+                    </a>
+                  ) : (
+                    <span>Ajoutez votre site web</span>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <span className="px-3 py-1 rounded-full bg-[#FFF1E6] border border-[#FFE0D1] text-xs text-[#B45309]">
                   {user.role === 'producer' ? 'Producteur' : user.role === 'sharer' ? 'Partageur' : 'Client'}
                 </span>
-                <span className="px-3 py-1 rounded-full bg-[#F3F4F6] border border-[#E5E7EB] text-xs text-[#374151]">
-                  Profil public
+                <span
+                  className={`px-3 py-1 rounded-full border text-xs ${
+                    isProfilePublic
+                      ? 'bg-[#F3F4F6] border-[#E5E7EB] text-[#374151]'
+                      : 'bg-[#FFF6F2] border-[#FFE0D1] text-[#B45309]'
+                  }`}
+                >
+                  {isProfilePublic ? 'Profil public' : 'Profil prive'}
+                </span>
+                <span
+                  className={`px-3 py-1 rounded-full border text-xs ${
+                    addressVisibility === 'public'
+                      ? 'bg-[#E6F6F0] border-[#C8EBDD] text-[#0F5132]'
+                      : 'bg-[#F3F4F6] border-[#E5E7EB] text-[#374151]'
+                  }`}
+                >
+                  {addressVisibility === 'public' ? 'Adresse visible' : 'Adresse masquée'}
                 </span>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap">
-            <button
-              onClick={() => setMode('edit')}
-              className="px-4 py-2 rounded-full bg-[#FF6B4A] text-white font-semibold shadow-md hover:bg-[#FF5A39] transition-all"
-            >
-              Modifier le profil
-            </button>
-            <button className="px-4 py-2 rounded-full bg-white border border-[#FF6B4A] text-[#FF6B4A] font-semibold hover:bg-[#FFF1E6] transition-all">
-              Partager
-            </button>
-          </div>
         </div>
 
         <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -272,7 +315,7 @@ export function ProfileView({
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 mt-6 md:mt-8">
         {renderTabContent()}
       </div>
     </div>
@@ -378,12 +421,43 @@ function ProfileEditPanel({
   onUpdateUser: (user: Partial<User>) => void;
   onClose: () => void;
 }) {
+  const defaultHandle = user.handle ?? user.name.toLowerCase().replace(/\s+/g, '');
   const [name, setName] = React.useState(user.name);
   const [address, setAddress] = React.useState(user.address || '');
   const [role, setRole] = React.useState<'producer' | 'sharer' | 'client'>(user.role);
+  const [handleValue, setHandleValue] = React.useState(defaultHandle);
+  const [profileImage, setProfileImage] = React.useState(user.profileImage ?? '');
+  const [profileVisibility, setProfileVisibility] = React.useState<User['profileVisibility']>(
+    user.profileVisibility ?? 'public'
+  );
+  const [addressVisibility, setAddressVisibility] = React.useState<User['addressVisibility']>(
+    user.addressVisibility ?? 'public'
+  );
+  const [tagline, setTagline] = React.useState(user.tagline ?? '');
+  const [website, setWebsite] = React.useState(user.website ?? '');
+  const handleProfileImageUpload = (file?: File) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setProfileImage(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleSave = () => {
-    onUpdateUser({ name, address, role });
+    onUpdateUser({
+      name: name.trim() || user.name,
+      address: address.trim(),
+      role,
+      handle: handleValue.trim() || defaultHandle,
+      profileImage: profileImage || undefined,
+      profileVisibility,
+      addressVisibility,
+      tagline: tagline.trim(),
+      website: website.trim(),
+    });
     onClose();
   };
 
@@ -403,17 +477,22 @@ function ProfileEditPanel({
       </div>
 
       <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
-        <div className="flex items-start justify-between">
+        <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-[#FF6B4A] to-[#FFD166] flex items-center justify-center text-xl text-white">
-              {user.name.charAt(0)}
+            <div className="w-16 h-16 rounded-full overflow-hidden ring-2 ring-[#FFE8D7] bg-gradient-to-br from-[#FF6B4A] to-[#FFD166] flex items-center justify-center text-xl text-white">
+              {profileImage ? (
+                <ImageWithFallback src={profileImage} alt={name || user.name} className="w-full h-full object-cover" />
+              ) : (
+                <span>{(name || user.name).charAt(0)}</span>
+              )}
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="text-xl px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                className="text-xl px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                placeholder="Nom complet"
               />
               <div className="flex items-center gap-2">
                 <span className="px-3 py-1 bg-[#FF6B4A]/10 text-[#FF6B4A] text-xs rounded-full">
@@ -425,6 +504,20 @@ function ProfileEditPanel({
                     Verifie
                   </span>
                 )}
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-[#6B7280]">Identifiant profil</label>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-[#9CA3AF]">@</span>
+                  <input
+                    type="text"
+                    value={handleValue}
+                    onChange={(e) => setHandleValue(e.target.value.replace(/\s+/g, ''))}
+                    className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] text-sm"
+                    placeholder="votrepseudo"
+                  />
+                </div>
+                <p className="text-xs text-[#9CA3AF]">Utilise pour le lien du profil.</p>
               </div>
             </div>
           </div>
@@ -442,15 +535,101 @@ function ProfileEditPanel({
           <RoleButton label="Producteur" active={role === 'producer'} onClick={() => setRole('producer')} />
         </div>
 
-        <div>
-          <label className="block text-sm text-[#6B7280] mb-2">Adresse</label>
-          <textarea
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            placeholder="Entrez votre adresse complete"
-            rows={2}
-            className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
-          />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm text-[#6B7280] mb-2">Adresse</label>
+            <textarea
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="Entrez votre adresse complete"
+              rows={2}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
+            />
+            <div className="flex items-center gap-2 mt-2">
+              <VisibilityButton
+                label="Adresse visible"
+                icon={MapPin}
+                active={addressVisibility === 'public'}
+                onClick={() => setAddressVisibility('public')}
+              />
+              <VisibilityButton
+                label="Adresse masquee"
+                icon={Lock}
+                active={addressVisibility === 'private'}
+                onClick={() => setAddressVisibility('private')}
+              />
+            </div>
+          </div>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm text-[#6B7280] mb-2">Site web</label>
+              <input
+                type="url"
+                value={website}
+                onChange={(e) => setWebsite(e.target.value)}
+                placeholder="https://votresite.fr"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-[#6B7280] mb-2">Photo de profil</label>
+              <label
+                htmlFor="profile-image-upload"
+                className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center hover:border-[#FF6B4A] transition-colors cursor-pointer flex flex-col items-center gap-2"
+              >
+                <Upload className="w-8 h-8 text-[#6B7280]" />
+                <div className="text-sm text-[#6B7280]">
+                  Cliquez pour telecharger ou glissez une image
+                </div>
+                <div className="text-xs text-[#9CA3AF]">
+                  Le fichier sera ajoute lors de l'enregistrement du profil.
+                </div>
+                <input
+                  id="profile-image-upload"
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => handleProfileImageUpload(e.target.files?.[0])}
+                />
+              </label>
+              {profileImage && (
+                <p className="text-xs text-[#9CA3AF] mt-2">Apercu mis a jour (non envoye cote serveur).</p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm text-[#6B7280] mb-2">Phrase sur votre profil</label>
+            <textarea
+              value={tagline}
+              onChange={(e) => setTagline(e.target.value)}
+              placeholder="Une phrase qui apparaitra sur votre page."
+              rows={2}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-[#6B7280] mb-2">Visibilite du profil</label>
+            <div className="flex items-center gap-2">
+              <VisibilityButton
+                label="Public"
+                icon={Globe}
+                active={profileVisibility === 'public'}
+                onClick={() => setProfileVisibility('public')}
+              />
+              <VisibilityButton
+                label="Prive"
+                icon={Lock}
+                active={profileVisibility === 'private'}
+                onClick={() => setProfileVisibility('private')}
+              />
+            </div>
+            <p className="text-xs text-[#9CA3AF] mt-1">
+              Le mode prive limite la visibilite de votre profil et de vos informations.
+            </p>
+          </div>
         </div>
       </div>
 
@@ -505,6 +684,31 @@ function RoleButton({ label, active, onClick }: { label: string; active: boolean
         active ? 'border-[#FF6B4A] bg-[#FF6B4A]/10 text-[#FF6B4A]' : 'border-gray-200 text-[#6B7280] hover:border-[#FFD166]'
       }`}
     >
+      {label}
+    </button>
+  );
+}
+
+function VisibilityButton({
+  label,
+  icon: Icon,
+  active,
+  onClick,
+}: {
+  label: string;
+  icon: React.ElementType;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-2 px-3 py-2 rounded-lg border-2 text-sm transition-colors ${
+        active ? 'border-[#FF6B4A] bg-[#FF6B4A]/10 text-[#FF6B4A]' : 'border-gray-200 text-[#6B7280] hover:border-[#FFD166]'
+      }`}
+    >
+      <Icon className="w-4 h-4" />
       {label}
     </button>
   );

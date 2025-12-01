@@ -4,6 +4,12 @@ export interface User {
   id: string;
   name: string;
   role: UserRole;
+  handle?: string;
+  profileImage?: string;
+  profileVisibility?: 'public' | 'private';
+  addressVisibility?: 'public' | 'private';
+  tagline?: string;
+  website?: string;
   address?: string;
   verified?: boolean;
   businessStatus?: string;
