@@ -6,6 +6,17 @@ This is a code bundle for TEST Site Partage. The original project is available a
 
 1. Run `npm i` to install the dependencies.
 2. Run `npm run dev` to start the development server.
+3. Copiez `.env.example` vers `.env` et renseignez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` si vous branchez Supabase.
+
+## Routing
+
+L'application utilise `react-router-dom` (BrowserRouter). Les routes principales sont :
+
+- `/` produits, `/carte` deck/carte, `/creer` creation (client/prod/partageur), `/messages`, `/profil` (profil personnel), `/profil/:handle` (profil public), `/produit/:id` (fiche produit), `/commande/:id` (vue commande).
+
+## Supabase
+
+`src/lib/supabaseClient.ts` expose `getSupabaseClient()`/`supabase`. Le client est instancie si `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` sont renseignees dans votre `.env`.
 
 ## Structure du dossier `src`
 
