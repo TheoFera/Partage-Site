@@ -4,8 +4,10 @@ import { Calendar, MapPin, Package, Percent } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
 interface CreateOrderFormProps {
-  deck: DeckCard[];
+  products: DeckCard[];
   onCreateOrder: (order: any) => void;
+  preselectedProductIds?: string[];
+  onCancel?: () => void;
 }
 
 type PickupSlot = {
@@ -26,8 +28,8 @@ const defaultSlots: PickupSlot[] = [
   { day: 'sunday', label: 'Dimanche', enabled: false, start: '10:00', end: '12:00' },
 ];
 
-export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
-  const [selectedProducts, setSelectedProducts] = React.useState<string[]>([]);
+export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds, onCancel }: CreateOrderFormProps) {
+  const [selectedProducts, setSelectedProducts] = React.useState<string[]>(preselectedProductIds ?? []);
   const [title, setTitle] = React.useState('');
   const [visibility, setVisibility] = React.useState<'public' | 'private'>('public');
   const [sharerPercentage, setSharerPercentage] = React.useState(10);
@@ -40,7 +42,7 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
 
   const shareFraction = Math.min(Math.max(sharerPercentage / 100, 0), 0.8);
 
-  const selectedProductsData = deck.filter((p) => selectedProducts.includes(p.id));
+  const selectedProductsData = products.filter((p) => selectedProducts.includes(p.id));
   const totalWeightProducts = selectedProductsData.reduce((sum, p) => sum + (p.weightKg ?? 1), 0);
   const safeMinWeight = Math.max(0, minWeight);
   const effectiveWeight = Math.max(totalWeightProducts, safeMinWeight);
@@ -58,8 +60,8 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
     const weight = p.weightKg ?? 1;
     const logPerUnit = logPerKg * weight;
     const basePlusLog = p.price + logPerUnit;
-    const clientPrice = basePlusLog * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
-    const sharePerUnit = clientPrice - basePlusLog;
+    const participantPrice = basePlusLog * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
+    const sharePerUnit = participantPrice - basePlusLog;
     const priceType = p.measurement === 'kg' ? 'Au kilo' : 'À la pièce';
 
     return {
@@ -68,7 +70,7 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
       basePrice: p.price,
       logPerUnit,
       sharePerUnit,
-      clientPrice,
+      participantPrice,
       priceType,
     };
   });
@@ -77,7 +79,7 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
   const weightScale = totalWeightProducts > 0 ? effectiveWeight / totalWeightProducts : 1;
   const totalShareEffective = totalShareBase * weightScale;
 
-  const groupedByProducer = deck.reduce((acc, card) => {
+  const groupedByProducer = products.reduce((acc, card) => {
     const producerId = card.producerId;
     if (!acc[producerId]) {
       acc[producerId] = {
@@ -94,6 +96,18 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
       prev.includes(productId) ? prev.filter((id) => id !== productId) : [...prev, productId]
     );
   };
+
+  React.useEffect(() => {
+    if (preselectedProductIds && preselectedProductIds.length > 0) {
+      setSelectedProducts((prev) => {
+        const validPrev = prev.filter((id) => products.some((p) => p.id === id));
+        const next = [...preselectedProductIds, ...validPrev];
+        return Array.from(new Set(next));
+      });
+    } else {
+      setSelectedProducts((prev) => prev.filter((id) => products.some((p) => p.id === id)));
+    }
+  }, [preselectedProductIds, products]);
 
   const toggleSlot = (day: string) => {
     setPickupSlots((prev) => prev.map((slot) => (slot.day === day ? { ...slot, enabled: !slot.enabled } : slot)));
@@ -128,22 +142,22 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
       totals: {
         baseTotal: perProductRows.reduce((sum, r) => sum + r.basePrice, 0),
         logTotal,
-        clientTotal: perProductRows.reduce((sum, r) => sum + r.clientPrice, 0),
+        participantTotal: perProductRows.reduce((sum, r) => sum + r.participantPrice, 0),
         share: totalShareEffective,
         effectiveWeight,
       },
     });
   };
 
-  if (deck.length === 0) {
+  if (products.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 px-4">
         <div className="w-24 h-24 rounded-full bg-[#FF6B4A]/20 flex items-center justify-center mb-4">
           <Package className="w-12 h-12 text-[#FF6B4A]" />
         </div>
-        <h3 className="text-[#1F2937] mb-2">Votre sélection est vide</h3>
+        <h3 className="text-[#1F2937] mb-2">Votre selection est vide</h3>
         <p className="text-[#6B7280] text-center max-w-sm">
-          Ajoutez des produits à votre sélection depuis l'onglet Produits ou depuis la page des producteurs pour créer une commande groupée.
+          Utilisez le bouton "Creer" sur une carte produit pour pre-remplir une commande ici.
         </p>
       </div>
     );
@@ -430,7 +444,7 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
                     <span style={{ fontWeight: 600 }}>{totalShareEffective.toFixed(2)} €</span>
                   </p>
                   <p className="text-[#6B7280]">
-                    Prix client = produit + logistique + part du partageur. Créneaux : {renderPickupLine()}.
+                    Prix participant = produit + logistique + part du partageur. Créneaux : {renderPickupLine()}.
                   </p>
                 </div>
                 <div className="w-full overflow-x-auto border border-gray-200 rounded-lg bg-white">
@@ -442,7 +456,7 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
                         <th className="px-3 py-2 text-right">Prix producteur</th>
                         <th className="px-3 py-2 text-right">Coût livraison</th>
                         <th className="px-3 py-2 text-right">Part partageur</th>
-                        <th className="px-3 py-2 text-right">Prix client</th>
+                        <th className="px-3 py-2 text-right">Prix participant</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -453,7 +467,7 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
                           <td className="px-3 py-2 text-right">{row.basePrice.toFixed(2)} €</td>
                           <td className="px-3 py-2 text-right">{row.logPerUnit.toFixed(2)} €</td>
                           <td className="px-3 py-2 text-right">{row.sharePerUnit.toFixed(2)} €</td>
-                          <td className="px-3 py-2 text-right">{row.clientPrice.toFixed(2)} €</td>
+                          <td className="px-3 py-2 text-right">{row.participantPrice.toFixed(2)} €</td>
                         </tr>
                       ))}
                     </tbody>
@@ -465,14 +479,23 @@ export function CreateOrderForm({ deck, onCreateOrder }: CreateOrderFormProps) {
         </div>
       </div>
 
-      <div className="mt-6">
+      <div className="mt-6 flex flex-col sm:flex-row gap-3">
         <button
           type="submit"
           disabled={selectedProducts.length === 0}
-          className="w-full py-3 bg-[#FF6B4A] text-white rounded-xl hover:bg-[#FF5A39] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors shadow-lg"
+          className="w-full sm:flex-1 py-3 bg-[#FF6B4A] text-white rounded-xl hover:bg-[#FF5A39] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors shadow-lg"
         >
           Créer la commande
         </button>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="w-full sm:w-auto px-4 py-3 rounded-xl border border-gray-200 bg-white text-[#1F2937] hover:border-[#FF6B4A] transition-colors"
+          >
+            Annuler
+          </button>
+        )}
       </div>
     </form>
   );

@@ -32,7 +32,9 @@ interface MapViewProps {
   deck: DeckCard[];
   onRemoveFromDeck: (productId: string) => void;
   locationLabel: string;
-  userRole: 'producer' | 'sharer' | 'client';
+  userRole: 'producer' | 'sharer' | 'participant';
+  userLocation?: { lat: number; lng: number };
+  userAddress?: string;
 }
 
 function computeCenter(points: MapOrderPoint[]) {
@@ -112,10 +114,19 @@ function buildPopupContent(point: MapOrderPoint) {
   `;
 }
 
-export function MapView({ orders, deck, onRemoveFromDeck, locationLabel, userRole }: MapViewProps) {
+export function MapView({
+  orders,
+  deck,
+  onRemoveFromDeck,
+  locationLabel,
+  userRole,
+  userLocation,
+  userAddress,
+}: MapViewProps) {
   const mapContainerRef = React.useRef<HTMLDivElement | null>(null);
   const mapRef = React.useRef<L.Map | null>(null);
   const layersRef = React.useRef<L.LayerGroup | null>(null);
+  const [resolvedCenter, setResolvedCenter] = React.useState<{ lat: number; lng: number } | null>(null);
 
   const mapOrders = React.useMemo<MapOrderPoint[]>(() => {
     return orders
@@ -132,7 +143,52 @@ export function MapView({ orders, deck, onRemoveFromDeck, locationLabel, userRol
       }));
   }, [orders]);
 
-  const mapCenter = React.useMemo(() => computeCenter(mapOrders), [mapOrders]);
+  const mapCenter = React.useMemo(() => {
+    if (resolvedCenter) return resolvedCenter;
+    if (mapOrders.length) return computeCenter(mapOrders);
+    return defaultCenter;
+  }, [mapOrders, resolvedCenter?.lat, resolvedCenter?.lng]);
+
+  React.useEffect(() => {
+    if (userLocation) {
+      setResolvedCenter(userLocation);
+      return;
+    }
+    setResolvedCenter(null);
+  }, [userLocation?.lat, userLocation?.lng]);
+
+  React.useEffect(() => {
+    if (!userLocation) {
+      setResolvedCenter(null);
+    }
+  }, [userAddress, userLocation]);
+
+  React.useEffect(() => {
+    if (resolvedCenter || userLocation || !userAddress) return;
+
+    const controller = new AbortController();
+    const query = encodeURIComponent(userAddress);
+    fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`, {
+      signal: controller.signal,
+      headers: {
+        'Accept-Language': 'fr',
+        'User-Agent': 'cos-diffusion-map-view/1.0',
+      },
+    })
+      .then((res) => res.json())
+      .then((results) => {
+        if (!Array.isArray(results) || !results[0]?.lat || !results[0]?.lon) return;
+        const lat = Number(results[0].lat);
+        const lng = Number(results[0].lon);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          setResolvedCenter({ lat, lng });
+        }
+      })
+      .catch(() => null);
+
+    return () => controller.abort();
+  }, [mapOrders.length, resolvedCenter, userAddress, userLocation]);
+
   const deckLabel = 'Votre sélection';
   const paymentLabel =
     userRole === 'producer'
@@ -182,7 +238,7 @@ export function MapView({ orders, deck, onRemoveFromDeck, locationLabel, userRol
       layersRef.current?.addLayer(marker);
     });
 
-    if (mapRef.current && mapOrders.length) {
+    if (mapRef.current && mapOrders.length && !resolvedCenter) {
       const bounds = L.latLngBounds(mapOrders.map((point) => [point.lat, point.lng] as [number, number]));
       mapRef.current.fitBounds(bounds.pad(0.3));
     } else {
@@ -194,7 +250,7 @@ export function MapView({ orders, deck, onRemoveFromDeck, locationLabel, userRol
     return () => {
       layersRef.current?.clearLayers();
     };
-  }, [mapOrders, mapCenter.lat, mapCenter.lng]);
+  }, [mapOrders, mapCenter.lat, mapCenter.lng, resolvedCenter?.lat, resolvedCenter?.lng]);
 
   React.useEffect(
     () => () => {

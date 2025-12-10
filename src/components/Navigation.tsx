@@ -1,10 +1,10 @@
 import React from 'react';
-import { PlusSquare, User, MessageCircle, Search, Shuffle, MapPin } from 'lucide-react';
+import { User, MessageCircle, Search, Shuffle, MapPin } from 'lucide-react';
 
 interface NavigationProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
-  userRole: 'producer' | 'sharer' | 'client';
+  userRole: 'producer' | 'sharer' | 'participant';
 }
 
 export function Navigation({ activeTab, onTabChange, userRole }: NavigationProps) {
@@ -14,13 +14,8 @@ export function Navigation({ activeTab, onTabChange, userRole }: NavigationProps
   const secondIcon = MapPin;
   const secondLabel = 'Carte';
 
-  const centerIcon = userRole === 'client' ? Shuffle : PlusSquare;
-  const centerLabel =
-    userRole === 'client'
-      ? 'Decouvrir'
-      : userRole === 'producer'
-      ? 'Produit'
-      : 'Commande';
+  const centerIcon = Shuffle;
+  const centerLabel = 'Swipe';
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">

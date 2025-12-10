@@ -1,19 +1,19 @@
-import React from 'react';
+﻿import React from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { SupabaseClient, User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { Header } from './components/Header';
 import { Navigation } from './components/Navigation';
-import { ProductCard } from './components/ProductCard';
 import { CreateOrderForm } from './components/CreateOrderForm';
 import { ProfileView } from './components/ProfileView';
 import { MessagesView } from './components/MessagesView';
 import { AddProductForm } from './components/AddProductForm';
 import { ClientSwipeView } from './components/ClientSwipeView';
+import { ProductsLanding } from './components/ProductsLanding';
 import { MapView } from './components/MapView';
 import { OrderClientView } from './components/OrderClientView';
 import { AuthPage } from './components/AuthPage';
 import { mockProducts, mockUser, mockGroupOrders } from './data/mockData';
-import { Product, DeckCard, User, GroupOrder } from './types';
+import { Product, DeckCard, User, GroupOrder, UserRole, LegalEntity } from './types';
 import { getSupabaseClient } from './lib/supabaseClient';
 import { toast, Toaster } from 'sonner';
 
@@ -29,6 +29,7 @@ const getTabFromPath = (pathname: string) => {
   if (pathname.startsWith('/carte')) return 'deck';
   if (pathname.startsWith('/creer')) return 'create';
   if (pathname.startsWith('/messages')) return 'messages';
+  if (pathname === '/produit/nouveau') return 'profile';
   if (pathname.startsWith('/profil')) return 'profile';
   return 'home';
 };
@@ -75,11 +76,22 @@ const AuthWall = ({
   </div>
 );
 
+const normalizeUserRole = (role?: string | null): UserRole => {
+  if (role === 'client') return 'participant';
+  const allowedRoles: UserRole[] = ['producer', 'sharer', 'participant'];
+  return allowedRoles.includes(role as UserRole) ? (role as UserRole) : 'sharer';
+};
+
 const mapSupabaseUserToProfile = (authUser: SupabaseAuthUser): User => {
   const fallbackHandle = authUser.email?.split('@')[0] || authUser.id.slice(0, 6);
-  const metaRole = authUser.user_metadata?.role as User['role'] | undefined;
-  const allowedRoles: Array<User['role']> = ['producer', 'sharer', 'client'];
-  const safeRole = allowedRoles.includes(metaRole as User['role']) ? metaRole! : 'sharer';
+  const metaRole = authUser.user_metadata?.role as string | undefined;
+  const safeRole = normalizeUserRole(metaRole);
+  const metaLat = toNumberOrUndefined(
+    authUser.user_metadata?.address_lat ?? authUser.user_metadata?.addressLat ?? authUser.user_metadata?.lat
+  );
+  const metaLng = toNumberOrUndefined(
+    authUser.user_metadata?.address_lng ?? authUser.user_metadata?.addressLng ?? authUser.user_metadata?.lng
+  );
   return {
     id: authUser.id,
     name: authUser.user_metadata?.full_name || fallbackHandle || 'Profil',
@@ -94,12 +106,29 @@ const mapSupabaseUserToProfile = (authUser: SupabaseAuthUser): User => {
     verified: Boolean(authUser.user_metadata?.verified),
     businessStatus: authUser.user_metadata?.businessStatus,
     producerId: authUser.user_metadata?.producerId,
+    addressLat: metaLat,
+    addressLng: metaLng,
   };
 };
 
 const sanitizeHandle = (value?: string | null) => {
-  const base = (value || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20);
-  return base || 'profil';
+  if (!value) return 'profil';
+  const normalized = value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '')
+    .slice(0, 20);
+  return normalized || 'profil';
+};
+
+const toNumberOrUndefined = (value: unknown): number | undefined => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 };
 
 type ProfileRow = {
@@ -112,36 +141,88 @@ type ProfileRow = {
   tagline: string | null;
   website: string | null;
   address: string | null;
+  city: string | null;
+  postcode: string | null;
+  phone: string | null;
+  phone_public: string | null;
+  contact_email_public: string | null;
+  address_lat?: number | null;
+  address_lng?: number | null;
+  offers_on_site_pickup: boolean | null;
+  fresh_products_certified: boolean | null;
+  social_links: Record<string, string | null> | null;
+  opening_hours: Record<string, string> | null;
+  account_type: string | null;
   verified: boolean | null;
   business_status?: string | null;
   producer_id?: string | null;
   profile_image?: string | null;
 };
 
-const mapProfileRowToUser = (row: ProfileRow, authUser?: SupabaseAuthUser | null): User => {
-  const metaRole = (row.role as User['role']) || (authUser?.user_metadata?.role as User['role']) || 'sharer';
-  const allowedRoles: Array<User['role']> = ['producer', 'sharer', 'client'];
-  const safeRole = allowedRoles.includes(metaRole as User['role']) ? metaRole : 'sharer';
+type LegalEntityRow = {
+  id: string;
+  profile_id: string;
+  legal_name: string;
+  siret: string;
+  vat_number: string | null;
+  entity_type: string;
+};
+
+const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
+  legalName: row.legal_name,
+  siret: row.siret,
+  vatNumber: row.vat_number ?? undefined,
+  entityType: (row.entity_type as LegalEntity['entityType']) ?? 'company',
+});
+
+const mapProfileRowToUser = (
+  row: ProfileRow,
+  authUser?: SupabaseAuthUser | null,
+  legalEntityRow?: LegalEntityRow | null
+): User => {
+  const rawRole = (row.role as string) || (authUser?.user_metadata?.role as string) || 'sharer';
+  const safeRole = normalizeUserRole(rawRole);
   const fallbackName =
     authUser?.user_metadata?.full_name ||
     authUser?.email?.split('@')[0] ||
     row.handle ||
     'Profil';
+  const rowLat = toNumberOrUndefined(row.address_lat);
+  const rowLng = toNumberOrUndefined(row.address_lng);
+  const metaLat = toNumberOrUndefined(
+    authUser?.user_metadata?.address_lat ?? authUser?.user_metadata?.addressLat ?? authUser?.user_metadata?.lat
+  );
+  const metaLng = toNumberOrUndefined(
+    authUser?.user_metadata?.address_lng ?? authUser?.user_metadata?.addressLng ?? authUser?.user_metadata?.lng
+  );
 
   return {
     id: row.id,
     name: row.name || fallbackName,
     handle: row.handle || sanitizeHandle(fallbackName),
     role: safeRole,
+    accountType: (row.account_type as User['accountType']) ?? 'individual',
     profileImage: row.profile_image ?? undefined,
     profileVisibility: (row.profile_visibility as User['profileVisibility']) ?? 'public',
     addressVisibility: (row.address_visibility as User['addressVisibility']) ?? 'private',
     tagline: row.tagline ?? undefined,
     website: row.website ?? undefined,
     address: row.address ?? undefined,
+    city: row.city ?? undefined,
+    postcode: row.postcode ?? undefined,
+    phone: row.phone ?? undefined,
+    phonePublic: row.phone_public ?? undefined,
+    contactEmailPublic: row.contact_email_public ?? undefined,
+    offersOnSitePickup: Boolean(row.offers_on_site_pickup),
+    freshProductsCertified: Boolean(row.fresh_products_certified),
+    socialLinks: row.social_links ?? undefined,
+    openingHours: row.opening_hours ?? undefined,
     verified: Boolean(row.verified),
     businessStatus: row.business_status ?? undefined,
     producerId: row.producer_id ?? undefined,
+    addressLat: rowLat ?? metaLat,
+    addressLng: rowLng ?? metaLng,
+    legalEntity: legalEntityRow ? mapLegalRowToEntity(legalEntityRow) : undefined,
   };
 };
 
@@ -160,10 +241,15 @@ export default function App() {
   const [products, setProducts] = React.useState<Product[]>(mockProducts);
   const [groupOrders, setGroupOrders] = React.useState<GroupOrder[]>(mockGroupOrders);
   const [deck, setDeck] = React.useState<DeckCard[]>([]);
+  const [orderBuilderProducts, setOrderBuilderProducts] = React.useState<DeckCard[] | null>(null);
+  const [orderBuilderSelection, setOrderBuilderSelection] = React.useState<string[] | null>(null);
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [profileMode, setProfileMode] = React.useState<'view' | 'edit'>('view');
+  const [followingProfiles, setFollowingProfiles] = React.useState<Record<string, boolean>>({});
   const prevRoleRef = React.useRef<User['role'] | null>(null);
   const lastTabRef = React.useRef<string | null>(null);
+  const orderBuilderSourceRef = React.useRef<string | null>(null);
 
   const orderIdFromPath = React.useMemo(() => {
     const match = location.pathname.match(/^\/commande\/([^/]+)/);
@@ -173,6 +259,23 @@ export default function App() {
     const match = location.pathname.match(/^\/produit\/([^/]+)/);
     return match ? match[1] : null;
   }, [location.pathname]);
+
+  const fetchLegalEntity = React.useCallback(
+    async (profileId: string): Promise<LegalEntityRow | null> => {
+      if (!supabaseClient) return null;
+      const { data, error } = await supabaseClient
+        .from('legal_entities')
+        .select('*')
+        .eq('profile_id', profileId)
+        .maybeSingle();
+      if (error) {
+        console.warn('legal_entities fetch error', error);
+        return null;
+      }
+      return (data as LegalEntityRow | null) ?? null;
+    },
+    [supabaseClient]
+  );
 
   const ensureProfile = React.useCallback(
     async (authUser: SupabaseAuthUser): Promise<User> => {
@@ -195,10 +298,11 @@ export default function App() {
 
       const existing = await fetchExisting();
       if (existing) {
-        return mapProfileRowToUser(existing, authUser);
+        const legal = await fetchLegalEntity(existing.id);
+        return mapProfileRowToUser(existing, authUser, legal);
       }
 
-      const baseHandle = sanitizeHandle(authUser.email || authUser.id);
+      const baseHandle = sanitizeHandle(authUser.user_metadata?.handle || authUser.email || authUser.id);
       let attempt = 0;
       let handle = baseHandle;
       while (attempt < 3) {
@@ -213,12 +317,17 @@ export default function App() {
             address_visibility: 'private',
             producer_id: authUser.user_metadata?.producerId,
             profile_image: authUser.user_metadata?.avatar_url,
+            phone: authUser.user_metadata?.phone,
+            city: authUser.user_metadata?.city,
+            postcode: authUser.user_metadata?.postcode,
+            account_type: authUser.user_metadata?.account_type || 'individual',
           })
           .select()
           .maybeSingle();
 
         if (!error && data) {
-          return mapProfileRowToUser(data as ProfileRow, authUser);
+          const legal = await fetchLegalEntity(authUser.id);
+          return mapProfileRowToUser(data as ProfileRow, authUser, legal);
         }
         if (error && (error as any).code === '23505') {
           attempt += 1;
@@ -232,7 +341,7 @@ export default function App() {
       // Fallback to metadata mapping if insertion failed
       return mapSupabaseUserToProfile(authUser);
     },
-    [supabaseClient]
+    [fetchLegalEntity, supabaseClient]
   );
 
   const fetchProfileByHandle = React.useCallback(
@@ -248,9 +357,10 @@ export default function App() {
         return null;
       }
       if (!data) return null;
-      return mapProfileRowToUser(data as ProfileRow, null);
+      const legal = await fetchLegalEntity((data as ProfileRow).id);
+      return mapProfileRowToUser(data as ProfileRow, null, legal);
     },
-    [supabaseClient]
+    [fetchLegalEntity, supabaseClient]
   );
 
   React.useEffect(() => {
@@ -331,28 +441,6 @@ export default function App() {
 
   const currentProducerId =
     viewer.role === 'producer' ? viewer.producerId ?? 'current-user' : viewer.producerId ?? '';
-  const producerProducts = React.useMemo(
-    () => products.filter((product) => product.producerId === currentProducerId),
-    [products, currentProducerId]
-  );
-  const producerOrders = React.useMemo(
-    () => groupOrders.filter((order) => order.producerId === currentProducerId),
-    [currentProducerId, groupOrders]
-  );
-  const sharerOrders = React.useMemo(
-    () => groupOrders.filter((order) => order.sharerId === viewer.id),
-    [groupOrders, viewer.id]
-  );
-  const profileOrders = React.useMemo(() => {
-    const merged = new Map<string, GroupOrder>();
-    const source = viewer.role === 'producer' ? [...producerOrders, ...sharerOrders] : sharerOrders;
-    source.forEach((order) => {
-      if (!merged.has(order.id)) {
-        merged.set(order.id, order);
-      }
-    });
-    return Array.from(merged.values());
-  }, [producerOrders, sharerOrders, viewer.role]);
   const selectedOrder = React.useMemo(
     () => (orderIdFromPath ? groupOrders.find((order) => order.id === orderIdFromPath) ?? null : null),
     [groupOrders, orderIdFromPath]
@@ -378,6 +466,8 @@ export default function App() {
   }, [groupOrders]);
 
   const activeTab = React.useMemo(() => getTabFromPath(location.pathname), [location.pathname]);
+  const isAuthPage = location.pathname.startsWith('/connexion');
+
 
   const redirectToAuth = (path?: string, mode: 'login' | 'signup' = 'login') => {
     const target = path ?? location.pathname;
@@ -386,7 +476,10 @@ export default function App() {
 
   const changeTab = (tab: string) => {
     lastTabRef.current = null;
-    const target = tabRoutes[tab as keyof typeof tabRoutes] ?? tabRoutes.home;
+    const target =
+      tab === 'profile' && isAuthenticated && user?.handle
+        ? `/profil/${user.handle}`
+        : tabRoutes[tab as keyof typeof tabRoutes] ?? tabRoutes.home;
     const needsAuth = tab === 'deck' || tab === 'create' || tab === 'messages';
     if (needsAuth && !isAuthenticated) {
       redirectToAuth(target);
@@ -409,9 +502,13 @@ export default function App() {
     navigate(`/commande/${orderId}`);
   };
 
+  const openProductView = (productId: string) => {
+    navigate(`/produit/${productId}`);
+  };
+
   const closeOrderView = () => {
     const fallback =
-      lastTabRef.current ?? (viewer.role === 'client' ? tabRoutes.create : tabRoutes.home);
+      lastTabRef.current ?? (viewer.role === 'participant' ? tabRoutes.create : tabRoutes.home);
     lastTabRef.current = null;
     navigate(fallback);
   };
@@ -423,17 +520,25 @@ export default function App() {
       return;
     }
     if (prevRoleRef.current !== user.role) {
-      const target = user.role === 'client' ? tabRoutes.create : tabRoutes.home;
+      const target = user.role === 'participant' ? tabRoutes.create : tabRoutes.home;
       navigate(target, { replace: true });
       prevRoleRef.current = user.role;
     }
   }, [user, navigate]);
 
-  React.useEffect(() => {
-    if (location.pathname === '/' && user?.role === 'client') {
-      navigate(tabRoutes.create, { replace: true });
-    }
-  }, [location.pathname, navigate, user]);
+  const asDeckCard = React.useCallback(
+    (product: Product): DeckCard => {
+      const existing = deck.find((card) => card.id === product.id);
+      return existing ?? { ...product, addedAt: new Date() };
+    },
+    [deck]
+  );
+
+  const resetOrderBuilder = React.useCallback(() => {
+    setOrderBuilderProducts(null);
+    setOrderBuilderSelection(null);
+    orderBuilderSourceRef.current = null;
+  }, []);
 
   const handleAddToDeck = (product: Product) => {
     if (!isAuthenticated) {
@@ -463,6 +568,25 @@ export default function App() {
     toast.success('Produit retire de votre selection');
   };
 
+  const handleStartOrderFromProduct = (product: Product) => {
+    if (!isAuthenticated) {
+      redirectToAuth(location.pathname);
+      return;
+    }
+    orderBuilderSourceRef.current = location.pathname;
+    const relatedProducts = products
+      .filter((item) => item.producerId === product.producerId)
+      .map(asDeckCard);
+    const collection = new Map<string, DeckCard>();
+    relatedProducts.forEach((item) => collection.set(item.id, item));
+    if (!collection.has(product.id)) {
+      collection.set(product.id, asDeckCard(product));
+    }
+    setOrderBuilderProducts(Array.from(collection.values()));
+    setOrderBuilderSelection([product.id]);
+    navigate('/commande/nouvelle');
+  };
+
   const handleUpdateOrderVisibility = (orderId: string, visibility: GroupOrder['visibility']) => {
     if (!isAuthenticated) {
       redirectToAuth(location.pathname);
@@ -473,15 +597,21 @@ export default function App() {
     );
   };
 
-  const handlePurchaseOrder = (orderId: string, total?: number) => {
+  const handlePurchaseOrder = (orderId: string, total?: number, weight?: number) => {
     if (!isAuthenticated) {
       redirectToAuth(location.pathname);
       return;
     }
+    const addedWeight = weight ?? 0;
     setGroupOrders((prev) =>
       prev.map((order) =>
         order.id === orderId
-          ? { ...order, participants: order.participants + 1, totalValue: order.totalValue + (total ?? 0) }
+          ? {
+              ...order,
+              participants: order.participants + 1,
+              totalValue: order.totalValue + (total ?? 0),
+              orderedWeight: (order.orderedWeight ?? 0) + addedWeight,
+            }
           : order
       )
     );
@@ -490,7 +620,7 @@ export default function App() {
   const handleCreateOrder = (orderData: any) => {
     if (!user) {
       toast.info('Connectez-vous pour publier une commande.');
-      redirectToAuth(tabRoutes.create);
+      redirectToAuth('/commande/nouvelle');
       return;
     }
     const now = new Date();
@@ -506,20 +636,23 @@ export default function App() {
       sharerPercentage: orderData.sharerPercentage,
       minWeight: orderData.minWeight,
       maxWeight: orderData.maxWeight,
+      orderedWeight: 0,
       deadline: orderData.deadline ?? now,
       pickupAddress: orderData.pickupAddress,
       pickupSlots: orderData.pickupSlots,
       message: orderData.message,
       status: 'open',
       visibility: orderData.visibility ?? 'public',
-      totalValue: orderData.totals?.clientTotal ?? 0,
+      totalValue: orderData.totals?.participantTotal ?? 0,
       participants: 1,
     };
 
     setGroupOrders((prev) => [newOrder, ...prev]);
     toast.success('Commande cree avec succes !');
-    const usedProductIds = orderData.products.map((p: Product) => p.id);
+    const usedProductIds = (orderData.products ?? []).map((p: Product) => p.id);
     setDeck(deck.filter((card) => !usedProductIds.includes(card.id)));
+    lastTabRef.current = orderBuilderSourceRef.current ?? lastTabRef.current;
+    resetOrderBuilder();
     openOrderView(newOrder.id);
   };
 
@@ -535,7 +668,9 @@ export default function App() {
     };
     setProducts([newProduct, ...products]);
     toast.success('Produit ajoute avec succes !');
-    changeTab('home');
+    setProfileMode('view');
+    const targetProfilePath = user.handle ? `/profil/${user.handle}` : tabRoutes.profile;
+    navigate(targetProfilePath);
   };
 
   const handleUpdateUser = async (userData: Partial<User>) => {
@@ -544,9 +679,11 @@ export default function App() {
       return;
     }
 
+    const normalizedRole = normalizeUserRole(userData.role ?? user.role);
+
     if (!supabaseClient) {
-      const updatedUser = { ...user, ...userData };
-      if (userData.role === 'producer') {
+      const updatedUser = { ...user, ...userData, role: normalizedRole };
+      if (normalizedRole === 'producer') {
         updatedUser.producerId = updatedUser.producerId ?? 'current-user';
       }
       setUser(updatedUser);
@@ -554,17 +691,49 @@ export default function App() {
       return;
     }
 
+    const nextHandle = sanitizeHandle(userData.handle ?? user.handle);
+    if (!nextHandle) {
+      toast.error('Tag invalide.');
+      return;
+    }
+
     const payload = {
       name: userData.name ?? user.name,
-      handle: userData.handle ?? user.handle,
-      role: userData.role ?? user.role,
+      handle: nextHandle,
+      role: normalizedRole,
+      account_type: userData.accountType ?? user.accountType ?? 'individual',
       tagline: userData.tagline ?? user.tagline,
       website: userData.website ?? user.website,
       address: userData.address ?? user.address,
+      city: userData.city ?? user.city,
+      postcode: userData.postcode ?? user.postcode,
+      phone: userData.phone ?? user.phone,
+      phone_public: userData.phonePublic ?? user.phonePublic,
+      contact_email_public: userData.contactEmailPublic ?? user.contactEmailPublic,
+      offers_on_site_pickup: userData.offersOnSitePickup ?? user.offersOnSitePickup ?? false,
+      fresh_products_certified: userData.freshProductsCertified ?? user.freshProductsCertified ?? false,
+      social_links: userData.socialLinks ?? user.socialLinks ?? null,
+      opening_hours: userData.openingHours ?? user.openingHours ?? null,
       profile_visibility: userData.profileVisibility ?? user.profileVisibility ?? 'public',
       address_visibility: userData.addressVisibility ?? user.addressVisibility ?? 'private',
       producer_id: userData.producerId ?? user.producerId,
     };
+
+    if (nextHandle !== user.handle) {
+      const { data: existing, error: existingError } = await supabaseClient
+        .from('profiles')
+        .select('id')
+        .eq('handle', nextHandle)
+        .maybeSingle();
+      if (existingError) {
+        toast.error('Verification du tag impossible.');
+        return;
+      }
+      if (existing && existing.id !== user.id) {
+        toast.error('Ce tag est deja utilise. Choisissez-en un autre.');
+        return;
+      }
+    }
 
     const { data, error } = await supabaseClient
       .from('profiles')
@@ -578,10 +747,34 @@ export default function App() {
       return;
     }
 
+    let legalEntityRow: LegalEntityRow | null = null;
+    if ((payload.account_type ?? user.accountType) !== 'individual' && userData.legalEntity?.legalName && userData.legalEntity.siret) {
+      const legalPayload = {
+        profile_id: user.id,
+        legal_name: userData.legalEntity.legalName,
+        siret: userData.legalEntity.siret,
+        vat_number: userData.legalEntity.vatNumber ?? null,
+        entity_type: userData.legalEntity.entityType ?? 'company',
+      };
+      const { data: legalData, error: legalError } = await supabaseClient
+        .from('legal_entities')
+        .upsert(legalPayload, { onConflict: 'profile_id' })
+        .select()
+        .maybeSingle();
+      if (legalError) {
+        toast.error('Informations legales non mises a jour.');
+      } else {
+        legalEntityRow = legalData as LegalEntityRow;
+      }
+    }
+
     if (data) {
-      const mapped = mapProfileRowToUser(data as ProfileRow, null);
+      const mapped = mapProfileRowToUser(data as ProfileRow, null, legalEntityRow);
       setUser(mapped);
       prevRoleRef.current = mapped.role;
+      if (location.pathname.startsWith('/profil')) {
+        navigate(`/profil/${mapped.handle}`, { replace: true });
+      }
       toast.success('Profil mis a jour !');
     }
   };
@@ -604,6 +797,41 @@ export default function App() {
     const shareUrl = `${window.location.origin}/profil/${profileHandle}`;
     navigator.clipboard?.writeText(shareUrl).catch(() => null);
     toast.success('Lien du profil copie !');
+  };
+
+  const handleToggleFollowProfile = (target: User) => {
+    if (!isAuthenticated) {
+      toast.info('Connectez-vous pour suivre des profils.');
+      redirectToAuth(location.pathname);
+      return;
+    }
+    setFollowingProfiles((prev) => {
+      const nextState = !prev[target.id];
+      const updated = { ...prev, [target.id]: nextState };
+      toast.success(
+        nextState
+          ? `Vous suivez ${target.name}. Notifications en cas de nouvelles commandes ou produits.`
+          : `Vous ne suivez plus ${target.name}.`
+      );
+      return updated;
+    });
+  };
+
+  const handleMessageUser = (target: User) => {
+    if (!isAuthenticated) {
+      toast.info('Connectez-vous pour envoyer un message.');
+      redirectToAuth(location.pathname);
+      return;
+    }
+    toast.info(`La messagerie arrive bientot. Vous pourrez ecrire a ${target.name} ici.`);
+  };
+
+  const openAddProductForm = () => {
+    if (!isAuthenticated) {
+      redirectToAuth('/produit/nouveau');
+      return;
+    }
+    navigate('/produit/nouveau');
   };
 
   const handleLogout = async () => {
@@ -645,24 +873,46 @@ export default function App() {
   };
 
   const locationLabel = viewer.address?.split(',')[0] ?? 'votre quartier';
+  const openProducerProfile = React.useCallback(
+    (product: Product) => {
+      const handle = product.producerName.toLowerCase().replace(/\s+/g, '');
+      navigate(`/profil/${handle}`);
+    },
+    [navigate]
+  );
+  const userLocation = React.useMemo(
+    () =>
+      viewer.addressLat !== undefined && viewer.addressLng !== undefined
+        ? { lat: viewer.addressLat, lng: viewer.addressLng }
+        : undefined,
+    [viewer.addressLat, viewer.addressLng]
+  );
+  const userAddressQuery = React.useMemo(() => {
+    if (viewer.address?.trim()) return viewer.address;
+    const cityQuery = [viewer.postcode, viewer.city].filter(Boolean).join(' ');
+    return cityQuery || undefined;
+  }, [viewer.address, viewer.city, viewer.postcode]);
   const canSaveProduct = isAuthenticated && viewer.role !== 'producer';
+  const deckSelectionIds = React.useMemo(() => new Set(deck.map((card) => card.id)), [deck]);
   const swipeProducts = publicOrderProducts;
   const renderProductGrid = () => {
-    if (filteredProducts.length === 0) {
-      return <NotFound message="Aucun produit ne correspond a votre recherche." />;
-    }
     return (
-      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
-        {filteredProducts.map((product) => (
-          <ProductCard
-            key={product.id}
-            product={product}
-            onAddToDeck={canSaveProduct ? handleAddToDeck : undefined}
-            inDeck={deck.some((card) => card.id === product.id)}
-            showAddButton={canSaveProduct}
-          />
-        ))}
-      </div>
+      <ProductsLanding
+        products={products}
+        filteredProducts={filteredProducts}
+        orders={groupOrders}
+        filteredOrders={filteredMapOrders}
+        canSaveProduct={canSaveProduct}
+        deck={deck}
+        onAddToDeck={canSaveProduct ? handleAddToDeck : undefined}
+        onRemoveFromDeck={handleRemoveFromDeck}
+        onOpenProduct={openProductView}
+        onOpenProducer={openProducerProfile}
+        onOpenOrder={openOrderView}
+        onStartOrderFromProduct={handleStartOrderFromProduct}
+        filtersOpen={filtersOpen}
+        onToggleFilters={() => setFiltersOpen((prev) => !prev)}
+      />
     );
   };
 
@@ -674,42 +924,37 @@ export default function App() {
         onRemoveFromDeck={handleRemoveFromDeck}
         locationLabel={locationLabel}
         userRole={viewer.role}
+        userLocation={userLocation}
+        userAddress={userAddressQuery}
       />
     );
   };
 
   const renderCreateContent = () => {
-    if (viewer.role === 'producer') {
-      return <AddProductForm onAddProduct={handleAddProduct} />;
-    }
-    if (viewer.role === 'client') {
-      return (
-        <ClientSwipeView
-          products={swipeProducts}
-          onSave={handleAddToDeck}
-          locationLabel={locationLabel}
-        />
-      );
-    }
-    return <CreateOrderForm deck={deck} onCreateOrder={handleCreateOrder} />;
+    return (
+      <ClientSwipeView
+        products={swipeProducts}
+        onSave={handleAddToDeck}
+        locationLabel={locationLabel}
+      />
+    );
   };
 
   const getHomeHeading = () => {
     return {
       title: 'Produits',
-      subtitle: `Decouvrez les produits autour de ${locationLabel}.`,
+      subtitle: `Decouvrez les produits autour de chez vous.`,
     };
   };
   const getPageTitle = () => {
+    if (isAuthPage) return 'Connexion';
+    if (location.pathname.startsWith('/commande/nouvelle')) return 'Nouvelle commande';
+    if (location.pathname === '/produit/nouveau') return 'Nouveau produit';
     if (activeTab === 'deck') {
       if (viewer.role === 'producer') return 'Commandes en cours';
       return 'Carte';
     }
-    if (activeTab === 'create') {
-      if (viewer.role === 'client') return 'Decouvrir';
-      if (viewer.role === 'producer') return 'Produit';
-      return 'Nouvelle commande';
-    }
+    if (activeTab === 'create') return 'Decouvrir';
     if (activeTab === 'messages') return 'Messages';
     if (activeTab === 'profile') return 'Mon Profil';
     if (location.pathname.startsWith('/produit/')) return selectedProduct?.name ?? 'Produit';
@@ -719,13 +964,18 @@ export default function App() {
 
   const homeHeading = getHomeHeading();
   const pageTitle = getPageTitle();
+  const isOrderCreation = location.pathname.startsWith('/commande/nouvelle');
+  const isAddProductView = location.pathname === '/produit/nouveau';
   const isOrderView = Boolean(selectedOrder && location.pathname.startsWith('/commande/'));
   const isProductView = Boolean(selectedProduct && location.pathname.startsWith('/produit/'));
-  const isAuthPage = location.pathname.startsWith('/connexion');
-  const mainPadding = isAuthPage ? 'pt-0 pb-0' : isOrderView ? 'pt-24 pb-24' : 'pt-20 pb-24';
-  const mainPaddingBottom = isAuthPage ? '0' : isOrderView ? '12rem' : '10rem';
+  const isOwnProfileView =
+    isAuthenticated &&
+    (location.pathname === '/profil' ||
+      (!!user?.handle && location.pathname === `/profil/${user.handle}`));
+  const mainPadding = isOrderView ? 'pt-24 pb-24' : 'pt-20 pb-24';
+  const mainPaddingBottom = isOrderView ? '12rem' : '10rem';
   const profileHeaderActions =
-    activeTab === 'profile' && !isOrderView && isAuthenticated ? (
+    activeTab === 'profile' && !isOrderView && isOwnProfileView ? (
       <div className="flex items-center gap-2">
         <button
           onClick={handleEditProfile}
@@ -818,9 +1068,7 @@ export default function App() {
       };
     }, [fetchProfileByHandle, params.handle, resolvedIsOwn, user, viewer.handle, viewer.name]);
 
-    if (!resolvedIsOwn && !loadingProfile && !fetchedProfile) {
-      return <NotFound message="Profil introuvable." />;
-    }
+    const shouldShowNotFound = !resolvedIsOwn && !loadingProfile && !fetchedProfile;
 
     const profileUser: User = resolvedIsOwn
       ? (user as User)
@@ -831,25 +1079,94 @@ export default function App() {
           addressVisibility: 'private',
         };
 
-    const profileDeck = resolvedIsOwn ? deck : [];
-    const profileOrdersForView = resolvedIsOwn
-      ? profileOrders
-      : profileOrders.filter((order) => order.visibility === 'public');
+    React.useEffect(() => {
+      if (!resolvedIsOwn) return;
+      const targetHandle = profileUser.handle;
+      if (targetHandle && location.pathname !== `/profil/${targetHandle}`) {
+        navigate(`/profil/${targetHandle}`, { replace: true });
+      }
+    }, [location.pathname, navigate, profileUser.handle, resolvedIsOwn]);
+
+    const producerProductsForProfile = React.useMemo(() => {
+      const byId = profileUser.producerId
+        ? products.filter((product) => product.producerId === profileUser.producerId)
+        : [];
+      if (byId.length) return byId;
+      return products.filter((product) => product.producerName === profileUser.name);
+    }, [products, profileUser.name, profileUser.producerId]);
+
+    const sharerOrdersForProfile = React.useMemo(
+      () => groupOrders.filter((order) => order.sharerId === profileUser.id),
+      [groupOrders, profileUser.id]
+    );
+
+    const producerOrdersForProfile = React.useMemo(() => {
+      const byId = profileUser.producerId
+        ? groupOrders.filter((order) => order.producerId === profileUser.producerId)
+        : [];
+      if (byId.length) return byId;
+      return groupOrders.filter((order) => order.producerName === profileUser.name);
+    }, [groupOrders, profileUser.name, profileUser.producerId]);
+
+    const mergedOrdersForProfile = React.useMemo(() => {
+      const source =
+        profileUser.role === 'producer'
+          ? [...producerOrdersForProfile, ...sharerOrdersForProfile]
+          : [...sharerOrdersForProfile];
+      const unique = new Map<string, GroupOrder>();
+      source.forEach((order) => {
+        if (!unique.has(order.id)) unique.set(order.id, order);
+      });
+      return Array.from(unique.values());
+    }, [producerOrdersForProfile, profileUser.role, sharerOrdersForProfile]);
+
+    const visibleOrdersForProfile = React.useMemo(
+      () =>
+        resolvedIsOwn
+          ? mergedOrdersForProfile
+          : mergedOrdersForProfile.filter((order) => order.visibility === 'public'),
+      [mergedOrdersForProfile, resolvedIsOwn]
+    );
+
+    const externalDeck = React.useMemo(() => {
+      const collection = new Map<string, DeckCard>();
+      visibleOrdersForProfile.forEach((order) => {
+        order.products.forEach((product) => {
+          collection.set(product.id, { ...product, addedAt: new Date() });
+        });
+      });
+      return Array.from(collection.values());
+    }, [visibleOrdersForProfile]);
+
+    const profileDeck = resolvedIsOwn ? deck : externalDeck;
+
+    if (shouldShowNotFound) {
+      return <NotFound message="Profil introuvable." />;
+    }
+
+    const isFollowing = Boolean(followingProfiles[profileUser.id]);
 
     return (
       <ProfileView
         user={profileUser}
-        producerProducts={producerProducts}
+        producerProducts={producerProductsForProfile}
         deck={profileDeck}
-        orders={profileOrdersForView}
-        producerOrders={producerOrders}
+        orders={visibleOrdersForProfile}
         isOwnProfile={resolvedIsOwn}
         mode={resolvedIsOwn ? profileMode : 'view'}
         onModeChange={resolvedIsOwn ? setProfileMode : undefined}
         onShareProfile={resolvedIsOwn ? handleShareProfile : undefined}
         onUpdateUser={resolvedIsOwn ? handleUpdateUser : () => {}}
-        onRemoveFromDeck={resolvedIsOwn ? handleRemoveFromDeck : () => {}}
-        onOpenOrder={resolvedIsOwn ? openOrderView : undefined}
+        onRemoveFromDeck={handleRemoveFromDeck}
+        onAddToDeck={canSaveProduct ? handleAddToDeck : undefined}
+        selectionIds={deckSelectionIds}
+        onOpenOrder={openOrderView}
+        isFollowing={isFollowing}
+        onToggleFollow={!resolvedIsOwn ? () => handleToggleFollowProfile(profileUser) : undefined}
+        onMessageUser={!resolvedIsOwn ? () => handleMessageUser(profileUser) : undefined}
+        onStartOrderFromProduct={handleStartOrderFromProduct}
+        onAddProductClick={resolvedIsOwn && profileUser.role === 'producer' ? openAddProductForm : undefined}
+        onOpenProduct={openProductView}
       />
     );
   };
@@ -885,14 +1202,22 @@ export default function App() {
               {product.producerLocation}
             </span>
           </div>
-          {canSaveProduct && (
+          <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={() => (inDeck ? handleRemoveFromDeck(product.id) : handleAddToDeck(product))}
+              onClick={() => handleStartOrderFromProduct(product)}
               className="px-4 py-2 rounded-lg bg-[#FF6B4A] text-white text-sm font-semibold shadow-sm hover:bg-[#FF5A39] transition-colors"
             >
-              {inDeck ? 'Retirer de ma selection' : 'Ajouter a ma selection'}
+              Creer une commande
             </button>
-          )}
+            {canSaveProduct && (
+              <button
+                onClick={() => (inDeck ? handleRemoveFromDeck(product.id) : handleAddToDeck(product))}
+                className="px-4 py-2 rounded-lg border border-[#FF6B4A] text-[#FF6B4A] text-sm font-semibold shadow-sm hover:bg-[#FFF1E6] transition-colors"
+              >
+                {inDeck ? 'Retirer de ma selection' : 'Ajouter a ma selection'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -908,51 +1233,76 @@ export default function App() {
         order={order}
         onClose={closeOrderView}
         onVisibilityChange={(visibility) => handleUpdateOrderVisibility(order.id, visibility)}
-        onPurchase={(payload) => handlePurchaseOrder(order.id, payload?.total)}
+        onPurchase={(payload) => handlePurchaseOrder(order.id, payload?.total, payload?.weight)}
         isOwner={Boolean(user && order.sharerId === user.id)}
       />
     );
   };
 
-  const showSearch = (activeTab === 'home' || activeTab === 'deck') && !isOrderView && !isAuthPage;
+  const showSearch =
+    (activeTab === 'home' || activeTab === 'deck') &&
+    !isOrderView &&
+    !isAuthPage &&
+    !isOrderCreation &&
+    !isAddProductView;
+
+  React.useEffect(() => {
+    if (!showSearch) {
+      setFiltersOpen(false);
+    }
+  }, [showSearch]);
 
   return (
     <div className="min-h-screen bg-[#F9F2E4] overflow-x-hidden">
-      <Toaster position="top-center" richColors />
-      {!isAuthPage && (
-        <Header
-          showSearch={showSearch}
-          onSearch={setSearchQuery}
-          onLogoClick={() => changeTab('home')}
-          actions={headerActions}
-        />
-      )}
+      <Toaster position="top-center" richColors offset={96} />
+      <Header
+        showSearch={showSearch}
+        searchQuery={searchQuery}
+        onSearch={setSearchQuery}
+        onLogoClick={() => changeTab('home')}
+        actions={headerActions}
+        filtersActive={filtersOpen}
+        onToggleFilters={() => setFiltersOpen((prev) => !prev)}
+      />
 
       <main
         className={`max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-10 ${mainPadding}`}
         style={{ paddingBottom: mainPaddingBottom }}
       >
-        {!isAuthPage &&
-          (isOrderView ? (
-            <div className="mb-6">
-              <h1 className="text-[#1F2937]">Vue client</h1>
-              <p className="text-[#6B7280]">Ajustez les quantites, partagez et changez la visibilite.</p>
-            </div>
-          ) : isProductView && selectedProduct ? (
-            <div className="mb-6">
-              <h1 className="text-[#1F2937]">{selectedProduct.name}</h1>
-              <p className="text-[#6B7280]">{selectedProduct.producerName}</p>
-            </div>
-          ) : activeTab === 'home' ? (
-            <div className="mb-8">
-              <h1 className="text-[#1F2937] mb-2">{homeHeading.title}</h1>
-              <p className="text-[#6B7280]">{homeHeading.subtitle}</p>
-            </div>
-          ) : (
-            <div className="mb-6">
-              <h1 className="text-[#1F2937]">{pageTitle}</h1>
-            </div>
-          ))}
+        {isOrderView ? (
+          <div className="mb-6">
+            <h1 className="text-[#1F2937]">Vue participant</h1>
+            <p className="text-[#6B7280]">Ajustez les quantites, partagez et changez la visibilite.</p>
+          </div>
+        ) : isProductView && selectedProduct ? (
+          <div className="mb-6">
+            <h1 className="text-[#1F2937]">{selectedProduct.name}</h1>
+            <p className="text-[#6B7280]">{selectedProduct.producerName}</p>
+          </div>
+        ) : isAuthPage ? (
+          <div className="mb-6">
+            <h1 className="text-[#1F2937]">{pageTitle || 'Connexion'}</h1>
+            <p className="text-[#6B7280]">Accedez a votre compte ou creez-en un pour continuer.</p>
+          </div>
+        ) : isOrderCreation || isAddProductView ? (
+          <div className="mb-6">
+            <h1 className="text-[#1F2937]">{pageTitle}</h1>
+            <p className="text-[#6B7280]">
+              {isOrderCreation
+                ? 'Selectionnez vos produits puis configurez la commande.'
+                : 'Ajoutez une reference produit a votre vitrine.'}
+            </p>
+          </div>
+        ) : activeTab === 'home' ? (
+          <div className="mb-8">
+            <h1 className="text-[#1F2937] mb-2">{homeHeading.title}</h1>
+            <p className="text-[#6B7280]">{homeHeading.subtitle}</p>
+          </div>
+        ) : (
+          <div className="mb-6">
+            <h1 className="text-[#1F2937]">{pageTitle}</h1>
+          </div>
+        )}
 
         <Routes>
           <Route path="/" element={renderProductGrid()} />
@@ -973,8 +1323,48 @@ export default function App() {
           <Route path="/carte" element={renderProtected(renderDeckContent, tabRoutes.deck)} />
           <Route path="/creer" element={renderProtected(renderCreateContent, tabRoutes.create)} />
           <Route path="/messages" element={renderProtected(() => <MessagesView />, tabRoutes.messages)} />
-          <Route path="/profil" element={<ProfileRoute isOwn />} />
+          <Route
+            path="/commande/nouvelle"
+            element={
+              isAuthenticated ? (
+                <CreateOrderForm
+                  products={orderBuilderProducts ?? deck}
+                  preselectedProductIds={orderBuilderSelection ?? undefined}
+                  onCreateOrder={handleCreateOrder}
+                  onCancel={() => {
+                    const target = orderBuilderSourceRef.current ?? tabRoutes.home;
+                    resetOrderBuilder();
+                    navigate(target);
+                  }}
+                />
+              ) : (
+                <AuthWall
+                  onLogin={() => redirectToAuth('/commande/nouvelle', 'login')}
+                  onSignup={() => redirectToAuth('/commande/nouvelle', 'signup')}
+                  description="Connectez-vous pour creer une commande groupee."
+                />
+              )
+            }
+          />
+          <Route
+            path="/profil"
+            element={
+              isAuthenticated ? (
+                <ProfileRoute isOwn />
+              ) : (
+                <AuthPage
+                  supabaseClient={supabaseClient}
+                  onAuthSuccess={handleAuthSuccess}
+                  onDemoLogin={handleDemoLogin}
+                />
+              )
+            }
+          />
           <Route path="/profil/:handle" element={<ProfileRoute />} />
+          <Route
+            path="/produit/nouveau"
+            element={renderProtected(() => <AddProductForm onAddProduct={handleAddProduct} />, '/produit/nouveau')}
+          />
           <Route path="/produit/:id" element={<ProductRoute />} />
           <Route
             path="/commande/:id"
@@ -994,9 +1384,7 @@ export default function App() {
         </Routes>
       </main>
 
-      {!isAuthPage && (
-        <Navigation activeTab={activeTab} onTabChange={changeTab} userRole={viewer.role} />
-      )}
+      <Navigation activeTab={activeTab} onTabChange={changeTab} userRole={viewer.role} />
     </div>
   );
 }

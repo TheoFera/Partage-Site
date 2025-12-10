@@ -1,19 +1,39 @@
-export type UserRole = 'producer' | 'sharer' | 'client';
+export type UserRole = 'producer' | 'sharer' | 'participant';
 
 export interface User {
   id: string;
   name: string;
   role: UserRole;
   handle?: string;
+  accountType?: 'individual' | 'company' | 'association' | 'public_institution';
   profileImage?: string;
   profileVisibility?: 'public' | 'private';
   addressVisibility?: 'public' | 'private';
   tagline?: string;
   website?: string;
   address?: string;
+  city?: string;
+  postcode?: string;
+  phone?: string;
+  phonePublic?: string;
+  contactEmailPublic?: string;
+  addressLat?: number;
+  addressLng?: number;
+  offersOnSitePickup?: boolean;
+  freshProductsCertified?: boolean;
+  socialLinks?: Record<string, string | null>;
+  openingHours?: Record<string, string>;
   verified?: boolean;
   businessStatus?: string;
   producerId?: string;
+  legalEntity?: LegalEntity;
+}
+
+export interface LegalEntity {
+  legalName: string;
+  siret: string;
+  vatNumber?: string;
+  entityType: 'company' | 'association' | 'public_institution';
 }
 
 export interface Product {
@@ -48,6 +68,7 @@ export interface GroupOrder {
   sharerPercentage: number;
   minWeight: number;
   maxWeight: number;
+  orderedWeight?: number;
   deadline: Date;
   pickupAddress: string;
   message: string;

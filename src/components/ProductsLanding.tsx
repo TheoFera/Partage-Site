@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Leaf,
+  Heart,
 } from 'lucide-react';
 
 type SearchScope = 'products' | 'producers' | 'combined';
@@ -22,7 +23,9 @@ interface ProductsLandingProps {
   canSaveProduct: boolean;
   deck: DeckCard[];
   onAddToDeck?: (product: Product) => void;
+  onRemoveFromDeck?: (productId: string) => void;
   onOpenProduct: (productId: string) => void;
+  onOpenProducer?: (product: Product) => void;
   onOpenOrder: (orderId: string) => void;
   onStartOrderFromProduct?: (product: Product) => void;
   filtersOpen: boolean;
@@ -42,12 +45,11 @@ interface ProductGroupDescriptor {
   sharerName?: string;
 }
 
-const CARD_WIDTH = 240;
-const CARD_HEIGHT = 380;
-const CARD_GAP = 12;
-const MAX_VISIBLE_CARDS = 3;
-const CONTAINER_SIDE_PADDING = 24;
-const CONTAINER_FLEX_BASIS = 340;
+const CARD_WIDTH = 150;
+const CARD_HEIGHT = 230;
+const CARD_GAP = 10;
+const MAX_VISIBLE_CARDS = 2;
+const CONTAINER_SIDE_PADDING = 9;
 
 const productFilterOptions = [
   { id: 'fruits-legumes', label: 'Fruits & Légumes' },
@@ -104,6 +106,14 @@ const parseDistanceKm = (value: string) => {
   return parseFloat(match[1].replace(',', '.'));
 };
 
+const stripDistance = (value?: string) => {
+  if (!value) return '';
+  return value
+    .replace(/\s*[-–—]?\s*\d+(?:[.,]\d+)?\s*km/gi, '')
+    .replace(/\s*[-–—]\s*$/, '')
+    .trim();
+};
+
 const getProductAttributes = (product: Product) => {
   const normalized = normalizeText(`${product.name} ${product.description}`);
   const distance = parseDistanceKm(product.producerLocation);
@@ -146,7 +156,9 @@ export function ProductsLanding({
   canSaveProduct,
   deck,
   onAddToDeck,
+  onRemoveFromDeck,
   onOpenProduct,
+  onOpenProducer,
   onOpenOrder,
   onStartOrderFromProduct,
   filtersOpen,
@@ -160,6 +172,16 @@ export function ProductsLanding({
   const [localOnly, setLocalOnly] = React.useState(false);
 
   const deckIds = React.useMemo(() => new Set(deck.map((card) => card.id)), [deck]);
+  const toggleSelection = React.useCallback(
+    (product: Product, isSelected: boolean) => {
+      if (isSelected) {
+        onRemoveFromDeck?.(product.id);
+      } else {
+        onAddToDeck?.(product);
+      }
+    },
+    [onAddToDeck, onRemoveFromDeck]
+  );
 
   const relatedByProducer = React.useMemo(() => {
     const map = new Map<string, Product[]>();
@@ -205,7 +227,7 @@ export function ProductsLanding({
       const existing = grouped.get(product.producerId) ?? {
         id: product.producerId,
         name: product.producerName,
-        location: product.producerLocation,
+        location: stripDistance(product.producerLocation),
         tags,
         products: [],
       };
@@ -264,8 +286,9 @@ export function ProductsLanding({
   const orderGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     return ordersResults.map((order) => {
       const sortedProducts = [...order.products].sort((a, b) => a.name.localeCompare(b.name));
-      const location =
+      const locationRaw =
         order.pickupAddress || sortedProducts[0]?.producerLocation || order.producerName;
+      const location = stripDistance(locationRaw);
       const productCountLabel =
         sortedProducts.length > 1 ? `${sortedProducts.length} produits` : '1 produit';
       return {
@@ -287,7 +310,6 @@ export function ProductsLanding({
   );
 
   const showProducts = scope === 'products';
-  const showProducers = scope === 'producers';
   const showCombined = scope === 'combined';
   const hasProducts = productResults.length > 0;
   const hasProducers = producerResults.length > 0;
@@ -354,73 +376,117 @@ export function ProductsLanding({
             </div>
         </section>
       )}
-      <section className="space-y-4">
+              <section className="space-y-4">
         {showCombined ? (
           combinedGroups.length ? (
-            <div className="grid gap-4 px-1 sm:px-3 items-start w-full grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(340px,1fr))]">
-              {combinedGroups.map((group) => (
-                <ProductGroupContainer
+            <div className="px-1 sm:px-3 w-full">
+              <div
+                className="mx-auto"
+                style={{
+                  maxWidth: '1200px',
+                  textAlign: 'left',
+                  whiteSpace: 'normal',
+                }}
+              >
+                {combinedGroups.map((group) => (
+                <div
                   key={`${group.variant}-${group.id}`}
-                  group={group}
-                  canSave={canSaveProduct}
-                  deckIds={deckIds}
-                  onSave={onAddToDeck}
-                  onCreateOrder={onStartOrderFromProduct}
-                  onOpenProduct={onOpenProduct}
-                  onOpenOrder={onOpenOrder}
-                />
+                  style={{
+                    display: 'inline-block',
+                    verticalAlign: 'top',
+                    marginRight: '12px',  // espace horizontal entre conteneurs
+                    marginBottom: '12px', // espace vertical entre les lignes
+                  }}
+                >
+                  <ProductGroupContainer
+                    group={group}
+                    canSave={canSaveProduct}
+                    deckIds={deckIds}
+                    onSave={onAddToDeck}
+                    onRemoveFromDeck={onRemoveFromDeck}
+                    onToggleSelection={toggleSelection}
+                    onCreateOrder={onStartOrderFromProduct}
+                    onOpenProduct={onOpenProduct}
+                    onOpenOrder={onOpenOrder}
+                    onOpenProducer={onOpenProducer}
+                  />
+                </div>
               ))}
+              </div>
             </div>
           ) : (
             <EmptyState
-              title="Aucun resultat"
+              title="Aucun résultat"
               subtitle="Ajustez les filtres pour voir producteurs, partageurs et produits correspondants."
             />
           )
         ) : showProducts ? (
           hasProducts ? (
-            <div className="grid gap-3 items-stretch px-1 sm:px-3 w-full grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(240px,1fr))]">
-              {productResults.map((product) => (
-                <ProductResultCard
-                  key={product.id}
-                  product={product}
-                  related={
-                    relatedByProducer.get(product.producerId)?.filter((p) => p.id !== product.id) ?? []
-                  }
-                  canSave={canSaveProduct}
-                  inDeck={deckIds.has(product.id)}
-                  onSave={onAddToDeck}
-                  onCreateOrder={onStartOrderFromProduct}
-                  onOpen={onOpenProduct}
-                  compact
-                  cardWidth={CARD_WIDTH}
-                />
-              ))}
+            <div className="px-1 sm:px-3 w-full">
+              <div className="flex flex-wrap gap-3 items-stretch w-full justify-start">
+                {productResults.map((product) => (
+                  <ProductResultCard
+                    key={product.id}
+                    product={product}
+                    related={
+                      relatedByProducer
+                        .get(product.producerId)
+                        ?.filter((p) => p.id !== product.id) ?? []
+                    }
+                    canSave={canSaveProduct}
+                    inDeck={deckIds.has(product.id)}
+                    onSave={onAddToDeck}
+                    onRemove={onRemoveFromDeck}
+                    onToggleSelection={toggleSelection}
+                    onOpenProducer={onOpenProducer}
+                    onCreateOrder={onStartOrderFromProduct}
+                    onOpen={onOpenProduct}
+                    compact
+                    cardWidth={CARD_WIDTH}
+                  />
+                ))}
+              </div>
             </div>
           ) : (
             <EmptyState
-              title="Aucun produit trouve"
-              subtitle="Ajustez les filtres ou changez de zone pour voir plus de resultats."
+              title="Aucun produit trouvé"
+              subtitle="Ajustez les filtres ou changez de zone pour voir plus de résultats."
             />
           )
         ) : hasProducers ? (
-          <div className="grid gap-4 px-1 sm:px-3 items-stretch w-full grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(340px,1fr))]">
-            {producerGroups.map((group) => (
-              <ProductGroupContainer
-                key={`producer-${group.id}`}
-                group={group}
-                canSave={canSaveProduct}
-                deckIds={deckIds}
-                onSave={onAddToDeck}
-                onCreateOrder={onStartOrderFromProduct}
-                onOpenProduct={onOpenProduct}
-              />
-            ))}
+          <div className="px-1 sm:px-3 w-full">
+            <div
+              className="mx-auto"
+              style={{
+                maxWidth: '1200px',
+                textAlign: 'left',
+                whiteSpace: 'normal',
+              }}
+            >
+              {producerGroups.map((group) => (
+                <div
+                  key={`producer-${group.id}`}
+                  className="inline-block align-top mr-4 mb-4"
+                >
+                  <ProductGroupContainer
+                    group={group}
+                    canSave={canSaveProduct}
+                    deckIds={deckIds}
+                    onSave={onAddToDeck}
+                    onRemoveFromDeck={onRemoveFromDeck}
+                    onToggleSelection={toggleSelection}
+                    onCreateOrder={onStartOrderFromProduct}
+                    onOpenProduct={onOpenProduct}
+                    onOpenProducer={onOpenProducer}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         ) : (
           <EmptyState
-            title="Aucun producteur trouve"
-            subtitle="Essayez un autre filtre (agroforesterie, bio, circuit court)."
+            title="Aucun producteur trouvé"
+            subtitle="Ajustez les filtres ou changez de zone pour voir plus de résultats."
           />
         )}
       </section>
@@ -518,6 +584,9 @@ function ProductResultCard({
   canSave,
   inDeck,
   onSave,
+  onRemove,
+  onToggleSelection,
+  onOpenProducer,
   onCreateOrder,
   onOpen,
   compact = false,
@@ -528,13 +597,20 @@ function ProductResultCard({
   canSave: boolean;
   inDeck: boolean;
   onSave?: (product: Product) => void;
+  onRemove?: (productId: string) => void;
+  onToggleSelection?: (product: Product, isSelected: boolean) => void;
+  onOpenProducer?: (product: Product) => void;
   onCreateOrder?: (product: Product) => void;
   onOpen: (productId: string) => void;
   compact?: boolean;
   cardWidth?: number;
 }) {
-  const measurementLabel = product.measurement === 'kg' ? 'Au kilo' : "A l'unite";
-  const productAttrs = Array.from(getProductAttributes(product));
+  const [heartPulse, setHeartPulse] = React.useState(false);
+  const [selected, setSelected] = React.useState(inDeck);
+  React.useEffect(() => {
+    setSelected(inDeck);
+  }, [inDeck]);
+  const measurementLabel = product.measurement === 'kg' ? '/ Kg' : "/ unité";
   const width = cardWidth ?? CARD_WIDTH;
   const cardStyle = {
     width: `${width}px`,
@@ -544,7 +620,25 @@ function ProductResultCard({
     minHeight: `${CARD_HEIGHT}px`,
     height: `${CARD_HEIGHT}px`,
   };
-  const imageStyle = compact ? { height: '140px' } : { height: '180px' };
+  const imageStyle = compact ? { height: '125px' } : { height: '150px' };
+  const headerText = product.producerName?.trim() ?? '';
+  const handleHeartClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setHeartPulse(true);
+    setSelected((prev) => !prev);
+    window.setTimeout(() => setHeartPulse(false), 180);
+    if (onToggleSelection) {
+      onToggleSelection(product, inDeck);
+      return;
+    }
+    if (inDeck && onRemove) {
+      onRemove(product.id);
+      return;
+    }
+    if (!inDeck && onSave) {
+      onSave(product);
+    }
+  };
 
   return (
     <div
@@ -557,62 +651,52 @@ function ProductResultCard({
           alt={product.name}
           className="w-full h-full object-cover"
         />
+        {canSave && (onToggleSelection || onSave || onRemove) && (
+          <button
+            type="button"
+            onClick={handleHeartClick}
+            className={`absolute top-3 right-3 w-10 h-10 rounded-full bg-white/90 shadow-sm flex items-center justify-center hover:shadow-md transition-transform duration-200 ease-out ${
+              heartPulse ? 'scale-115 ring-2 ring-[#FF6B4A]/60 shadow-lg' : ''
+            }`}
+            aria-label={selected ? 'Retirer de la sélection' : 'Ajouter à la sélection'}
+            aria-pressed={selected}
+          >
+            <Heart
+              className="w-5 h-5 transition-colors"
+              stroke={selected ? '#FF6B4A' : '#FF3B1F'}
+              fill={selected ? '#FF6B4A' : 'transparent'}
+              strokeWidth={1.8}
+            />
+          </button>
+        )}
       </div>
       <div className="p-3.5 space-y-3 flex-1 flex flex-col">
-        <div className="flex items-center justify-between gap-2">
-          <div className="space-y-1 min-w-0">
-            <p className="text-xs text-[#6B7280] flex items-center gap-1 truncate">
-              <MapPin className="w-3 h-3 flex-shrink-0" />
-              {product.producerName} - {product.producerLocation}
-            </p>
-            <h4 className="text-base font-semibold text-[#1F2937] truncate">{product.name}</h4>
-          </div>
-          {canSave && onSave && (
+        <div className="space-y-1 min-w-0">
+          {headerText && (
             <button
               type="button"
-              onClick={() => onSave(product)}
-              disabled={inDeck}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shadow-sm ${
-                inDeck
-                  ? 'bg-[#28C1A5] text-white cursor-default'
-                  : 'bg-[#FF6B4A] text-white hover:bg-[#FF5A39]'
-              }`}
+              onClick={() => onOpenProducer?.(product)}
+              className="text-xs text-[#6B7280] truncate text-left hover:text-[#FF6B4A] transition-colors"
             >
-              {inDeck ? 'Ajoute' : 'Ajouter'}
+              {headerText}
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => onOpen(product.id)}
+            className="text-left text-base font-semibold text-[#1F2937] hover:text-[#FF6B4A] transition-colors"
+          >
+            {product.name}
+          </button>
         </div>
 
-        <div className="flex items-center gap-2.5 text-xs text-[#1F2937] flex-wrap">
+        <div className="flex items-center gap-2 text-xs text-[#1F2937] flex-wrap">
           <span className="text-lg font-semibold text-[#FF6B4A]">
-            {product.price.toFixed(2)} EUR
+            {product.price.toFixed(2)} €
           </span>
-          <span className="text-[11px] px-2 py-0.5 rounded-full bg-[#F9FAFB] border border-gray-200 text-[#374151]">
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#F9FAFB] border border-gray-200 text-[#374151]">
             {product.unit} - {measurementLabel}
           </span>
-          <span
-            className={`text-[11px] px-2 py-0.5 rounded-full border ${
-              product.inStock
-                ? 'bg-[#E6F6F0] border-[#C8EBDD] text-[#0F5132]'
-                : 'bg-[#F3F4F6] border-[#E5E7EB] text-[#6B7280]'
-            }`}
-          >
-            {product.inStock ? 'En stock' : 'Rupture'}
-          </span>
-        </div>
-
-        <div className="flex flex-wrap gap-1.5">
-          <span className="text-[11px] px-2 py-0.5 rounded-full bg-[#FFF1E6] border border-[#FFE0D1] text-[#B45309]">
-            {product.category}
-          </span>
-          {productAttrs.map((attr) => (
-            <span
-              key={attr}
-              className="text-[11px] px-2 py-0.5 rounded-full bg-[#F9FAFB] border border-gray-200 text-[#374151]"
-            >
-              {attr.replace('-', ' ')}
-            </span>
-          ))}
         </div>
 
         <div className="flex items-center justify-between pt-1 mt-auto">
@@ -623,17 +707,9 @@ function ProductResultCard({
                 onClick={() => onCreateOrder(product)}
                 className="px-3.5 py-1.5 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors shadow-sm"
               >
-                Creer
+                Créer
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => onOpen(product.id)}
-              className="inline-flex items-center gap-2 text-lg font-semibold text-[#FF6B4A] hover:text-[#FF5A39]"
-            >
-              Voir la fiche
-              <ArrowRight className="w-4 h-4" />
-            </button>
           </div>
         </div>
       </div>
@@ -646,79 +722,101 @@ function ProductGroupContainer({
   canSave,
   deckIds,
   onSave,
+  onRemoveFromDeck,
+  onToggleSelection,
   onCreateOrder,
   onOpenProduct,
   onOpenOrder,
+  onOpenProducer,
 }: {
   group: ProductGroupDescriptor;
   canSave: boolean;
   deckIds: Set<string>;
   onSave?: (product: Product) => void;
+  onRemoveFromDeck?: (productId: string) => void;
+  onToggleSelection?: (product: Product, isSelected: boolean) => void;
   onCreateOrder?: (product: Product) => void;
   onOpenProduct: (productId: string) => void;
   onOpenOrder?: (orderId: string) => void;
+  onOpenProducer?: (product: Product) => void;
 }) {
   const useCarousel = group.products.length > MAX_VISIBLE_CARDS;
-  const scrollRef = React.useRef<HTMLDivElement | null>(null);
-  const [canScrollLeft, setCanScrollLeft] = React.useState(false);
-  const [canScrollRight, setCanScrollRight] = React.useState(useCarousel);
-  const visibleSlots = useCarousel ? MAX_VISIBLE_CARDS : Math.max(1, group.products.length);
-  const containerWidth =
-    visibleSlots * CARD_WIDTH + (visibleSlots - 1) * CARD_GAP + CONTAINER_SIDE_PADDING * 2;
+
+  // Index de départ des produits visibles dans le carrousel
+  const [startIndex, setStartIndex] = React.useState(0);
+
+  // borne pour ne pas dépasser la fin
+  const maxIndex = Math.max(0, group.products.length - MAX_VISIBLE_CARDS);
+
+  const canScrollLeft = useCarousel && startIndex > 0;
+  const canScrollRight = useCarousel && startIndex < maxIndex;
+
+  const visibleSlots = useCarousel
+    ? MAX_VISIBLE_CARDS
+    : Math.max(1, group.products.length);
+
   const containerMinWidth = CARD_WIDTH + CONTAINER_SIDE_PADDING * 2;
+  const containerMaxWidth =
+    visibleSlots * CARD_WIDTH +
+    (visibleSlots - 1) * CARD_GAP +
+    CONTAINER_SIDE_PADDING * 2;
 
-  const updateScrollState = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const { scrollLeft, scrollWidth, clientWidth } = el;
-    setCanScrollLeft(scrollLeft > 8);
-    setCanScrollRight(scrollLeft + clientWidth < scrollWidth - 8);
+  const containerStyle: React.CSSProperties = {
+    minWidth: `${containerMinWidth}px`,
+    maxWidth: `${containerMaxWidth}px`,
+    width: '100%',
+    flex: '0 0 auto',
+    paddingInline: CONTAINER_SIDE_PADDING,
   };
 
-  const scrollByCards = (direction: number) => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const delta = direction * (CARD_WIDTH + CARD_GAP) * 2;
-    el.scrollBy({ left: delta, behavior: 'smooth' });
-    window.requestAnimationFrame(updateScrollState);
-  };
-
-  React.useEffect(() => {
-    updateScrollState();
-  }, [group.products.length]);
 
   const isOrder = group.variant === 'order';
   const firstProduct = group.products[0];
 
+  // Produits effectivement affichés
+  const productsToShow = useCarousel
+    ? group.products.slice(startIndex, startIndex + MAX_VISIBLE_CARDS)
+    : group.products;
+
+  const goLeft = () => {
+    if (!canScrollLeft) return;
+    setStartIndex((prev) => Math.max(prev - 1, 0));
+  };
+
+  const goRight = () => {
+    if (!canScrollRight) return;
+    setStartIndex((prev) => Math.min(prev + 1, maxIndex));
+  };
+
   return (
     <div
-      className="relative overflow-hidden rounded-3xl border border-[#FFE0D1] bg-gradient-to-b from-white via-white to-[#FFF8F3] shadow-[0_20px_50px_-28px_rgba(255,107,74,0.35)] flex flex-col h-full"
-      style={{
-        width: '100%',
-        minWidth: 0,
-        maxWidth: '100%',
-        flex: `1 1 ${CONTAINER_FLEX_BASIS}px`,
-      }}
+      className="relative overflow-hidden rounded-2xl border border-[#FFE0D1] bg-white shadow-[0_20px_50px_-28px_rgba(255,107,74,0.35)] flex flex-col h-full"
+      style={containerStyle}
     >
+      {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-4 py-3 border-b border-[#FFE0D1] bg-white">
         <div className="space-y-1 min-w-0">
           <p className="text-xs text-[#6B7280] flex items-center gap-1 truncate">
             <MapPin className="w-3 h-3" />
             {group.location}
           </p>
-          <h4 className="text-base font-semibold text-[#1F2937] truncate">{group.title}</h4>
+          <h4 className="text-base font-semibold text-[#1F2937] truncate">
+            {group.title}
+          </h4>
           {isOrder && group.sharerName && (
-            <p className="text-xs text-[#6B7280] truncate">Par {group.sharerName}</p>
+            <p className="text-xs text-[#6B7280] truncate">
+              Par {group.sharerName}
+            </p>
           )}
         </div>
-        <div className="flex flex-col items-stretch sm:items-end gap-2 w-full sm:w-auto">
+        <div className="flex items-stretch sm:items-end gap-2 sm:w-auto">
           {!isOrder && onCreateOrder && firstProduct && (
             <button
               type="button"
               onClick={() => onCreateOrder(firstProduct)}
               className="px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors whitespace-nowrap shadow-sm"
             >
-              Creer
+              Créer
             </button>
           )}
           {isOrder && onOpenOrder && (
@@ -730,67 +828,72 @@ function ProductGroupContainer({
               Participer
             </button>
           )}
-          <div className="flex flex-wrap gap-2 justify-start sm:justify-end">
-            {group.tags.map((tag) => (
-              <span
-                key={tag}
-                className="px-2.5 py-1 rounded-full bg-white/90 border border-gray-200 text-[#374151] text-xs shadow-[0_2px_6px_rgba(0,0,0,0.04)]"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
         </div>
       </div>
-      <div className="p-3 sm:p-4 flex-1 flex">
+
+      {/* Corps : carrousel logique ou liste simple */}
+      <div
+        className="p-3 sm:p-4 flex-1 flex"
+        style={{ paddingInline: CONTAINER_SIDE_PADDING }}
+      >
         {useCarousel ? (
           <div className="relative w-full">
             <div
-              ref={scrollRef}
-              onScroll={updateScrollState}
-              className="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory scroll-smooth px-1 sm:px-0"
+              className="flex gap-2 w-full justify-center"
               style={{ alignItems: 'stretch' }}
             >
-              {group.products.map((product) => (
+              {productsToShow.map((product) => (
                 <div
                   key={product.id}
-                  className="snap-start"
-                  style={{ width: `${CARD_WIDTH}px`, minWidth: `${CARD_WIDTH}px`, flex: `0 0 ${CARD_WIDTH}px` }}
+                  style={{
+                    width: `${CARD_WIDTH}px`,
+                    minWidth: `${CARD_WIDTH}px`,
+                    flex: `0 0 ${CARD_WIDTH}px`,
+                  }}
                 >
-                  <ProductResultCard
-                    product={product}
-                    related={[]}
-                    canSave={canSave}
-                    inDeck={deckIds.has(product.id)}
-                    onSave={onSave}
-                    onOpen={onOpenProduct}
-                    compact
-                    cardWidth={CARD_WIDTH}
-                  />
-                </div>
+              <ProductResultCard
+                product={product}
+                related={[]}
+                canSave={canSave}
+                inDeck={deckIds.has(product.id)}
+                onSave={onSave}
+                onRemove={onRemoveFromDeck}
+                onToggleSelection={onToggleSelection}
+                onOpenProducer={onOpenProducer}
+                onOpen={onOpenProduct}
+                compact
+                cardWidth={CARD_WIDTH}
+              />
+            </div>
               ))}
             </div>
+
+            {/* Flèches */}
             {canScrollLeft && (
               <button
                 type="button"
-                onClick={() => scrollByCards(-1)}
-                className="absolute left-1 sm:left-2 top-1/2 -translate-y-1/2 bg-white/90 border border-gray-200 shadow-sm rounded-full w-8 h-8 flex items-center justify-center"
+                onClick={goLeft}
+                className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/90 border border-gray-200 shadow-sm rounded-full w-8 h-8 flex items-center justify-center"
               >
                 <ChevronLeft className="w-4 h-4 text-[#374151]" />
               </button>
             )}
+
             {canScrollRight && (
               <button
                 type="button"
-                onClick={() => scrollByCards(1)}
-                className="absolute right-1 sm:right-2 top-1/2 -translate-y-1/2 bg-white/90 border border-gray-200 shadow-sm rounded-full w-8 h-8 flex items-center justify-center"
+                onClick={goRight}
+                className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/90 border border-gray-200 shadow-sm rounded-full w-8 h-8 flex items-center justify-center"
               >
                 <ChevronRight className="w-4 h-4 text-[#374151]" />
               </button>
             )}
           </div>
         ) : (
-          <div className="flex flex-wrap gap-3 sm:gap-4 pb-1 w-full" style={{ alignItems: 'stretch' }}>
+          <div
+            className="flex flex-wrap gap-2 sm:gap-3 pb-1 w-full justify-center"
+            style={{ alignItems: 'stretch' }}
+          >
             {group.products.map((product) => (
               <ProductResultCard
                 key={product.id}
@@ -799,6 +902,9 @@ function ProductGroupContainer({
                 canSave={canSave}
                 inDeck={deckIds.has(product.id)}
                 onSave={onSave}
+                onRemove={onRemoveFromDeck}
+                onToggleSelection={onToggleSelection}
+                onOpenProducer={onOpenProducer}
                 onOpen={onOpenProduct}
                 compact
                 cardWidth={CARD_WIDTH}
@@ -820,10 +926,3 @@ function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
     </div>
   );
 }
-
-
-
-
-
-
-

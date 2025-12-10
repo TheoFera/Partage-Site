@@ -21,7 +21,7 @@ interface OrderClientViewProps {
   onClose: () => void;
   onShare?: (order: GroupOrder) => void;
   onVisibilityChange?: (visibility: GroupOrder['visibility']) => void;
-  onPurchase?: (payload: { quantities: Record<string, number>; total: number }) => void;
+  onPurchase?: (payload: { quantities: Record<string, number>; total: number; weight: number }) => void;
   isOwner?: boolean;
 }
 
@@ -88,7 +88,9 @@ export function OrderClientView({
     [order.products, quantities]
   );
 
-  const orderedWeight = React.useMemo(
+  const alreadyOrderedWeight = order.orderedWeight ?? 0;
+
+  const selectedWeight = React.useMemo(
     () =>
       order.products.reduce((sum, product) => {
         const qty = quantities[product.id] ?? 0;
@@ -98,11 +100,29 @@ export function OrderClientView({
     [order.products, quantities]
   );
 
-  const progressPercent = order.minWeight > 0 ? (orderedWeight / order.minWeight) * 100 : 0;
-  const progressWidth = Math.min(progressPercent, 100);
+  const totalWeightTowardsGoal = alreadyOrderedWeight + selectedWeight;
+  const basePercent = order.minWeight > 0 ? (alreadyOrderedWeight / order.minWeight) * 100 : 0;
+  const selectionPercent = order.minWeight > 0 ? (selectedWeight / order.minWeight) * 100 : 0;
+  const progressPercent = basePercent + selectionPercent;
+  const cappedBase = Math.min(basePercent, 100);
+  const cappedSelection = Math.max(Math.min(basePercent + selectionPercent, 100) - cappedBase, 0);
   const extraPercent = Math.max(0, progressPercent - 100);
-  const remainingWeight = Math.max(order.minWeight - orderedWeight, 0);
-  const sharedValue = (totalPrice * order.sharerPercentage) / 100;
+  const remainingWeight = Math.max(order.minWeight - totalWeightTowardsGoal, 0);
+
+  const baseSegmentStyle: React.CSSProperties = {
+    width: `${cappedBase}%`,
+    boxShadow: '0 6px 16px -8px rgba(34,197,94,0.4)',
+    background: 'linear-gradient(90deg, #22c55e 0%, #16a34a 100%)',
+    backgroundColor: '#22c55e',
+  };
+
+  const selectionSegmentStyle: React.CSSProperties = {
+    width: `${cappedSelection}%`,
+    left: `${cappedBase}%`,
+    boxShadow: '0 6px 16px -8px rgba(250,204,21,0.6)',
+    background: 'linear-gradient(90deg, #facc15 0%, #f59e0b 100%)',
+    backgroundColor: '#facc15',
+  };
 
   const handleQuantityChange = (productId: string, delta: number) => {
     setQuantities((prev) => {
@@ -131,7 +151,12 @@ export function OrderClientView({
       toast.info('Ajoutez au moins une carte avant de valider.');
       return;
     }
-    onPurchase?.({ quantities, total: totalPrice });
+    onPurchase?.({ quantities, total: totalPrice, weight: selectedWeight });
+    const resetQuantities: Record<string, number> = {};
+    order.products.forEach((product) => {
+      resetQuantities[product.id] = 0;
+    });
+    setQuantities(resetQuantities);
     toast.success('Quantites enregistrees pour cette commande.');
   };
 
@@ -360,8 +385,9 @@ export function OrderClientView({
             </div>
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between text-xs text-[#6B7280] font-medium">
-                <span>{orderedWeight.toFixed(2)} kg commandés</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280] font-medium">
+                <span className="text-[#15803d] font-semibold">Déjà achetés : {alreadyOrderedWeight.toFixed(2)} kg</span>
+                <span className="text-[#d97706] font-semibold">Votre sélection : {selectedWeight.toFixed(2)} kg</span>
                 <span className="text-[#FF6B4A] font-semibold">Objectif : {order.minWeight} kg</span>
               </div>
               <div
@@ -369,11 +395,12 @@ export function OrderClientView({
                 style={{ boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.08)' }}
               >
                 <div
-                  className="relative h-full rounded-full bg-gradient-to-r from-[#FF9F6B] via-[#FF7A5C] to-[#FF4D4F] transition-[width] duration-500 ease-out"
-                  style={{
-                    width: `${progressWidth}%`,
-                    boxShadow: '0 6px 16px -8px rgba(255,107,74,0.8)',
-                  }}
+                  className="absolute left-0 top-0 h-full rounded-full bg-gradient-to-r from-[#22c55e] to-[#16a34a] transition-all duration-500 ease-out"
+                  style={baseSegmentStyle}
+                />
+                <div
+                  className="absolute top-0 h-full rounded-full bg-gradient-to-r from-[#facc15] to-[#f59e0b] transition-all duration-500 ease-out"
+                  style={selectionSegmentStyle}
                 />
               </div>
             </div>
@@ -401,7 +428,9 @@ export function OrderClientView({
               <p>
                 Montant à payer : <span className="text-[#1F2937] font-semibold">{formatPrice(totalPrice)}</span>
               </p>
-              <p className="text-xs text-[#6B7280]">Poids cumulé : {orderedWeight.toFixed(2)} kg</p>
+              <p className="text-xs text-[#6B7280]">
+                Poids pris en compte : {totalWeightTowardsGoal.toFixed(2)} kg (dont votre sélection : {selectedWeight.toFixed(2)} kg)
+              </p>
             </div>
             <div className="h-px bg-gray-100" />
             <div className="flex flex-wrap items-center justify-between gap-3">
