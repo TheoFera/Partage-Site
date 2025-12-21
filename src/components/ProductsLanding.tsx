@@ -387,7 +387,7 @@ export function ProductsLanding({
               margin: '0 auto',
             }}
           >
-            Participez à une commande près de chez vous ou créez la vôtre et gardez en gratuitement une part.
+            Participez à une commande près de chez vous ou créez la vôtre et gardez en gratuitement une partie.
           </p>
         </div>
       </section>
@@ -447,37 +447,33 @@ export function ProductsLanding({
           combinedGroups.length ? (
             <div className="px-1 sm:px-3 w-full">
               <div
-                className="mx-auto"
+                className="mx-auto flex flex-wrap justify-center gap-3"
                 style={{
                   maxWidth: '1200px',
-                  textAlign: 'left',
                   whiteSpace: 'normal',
                 }}
               >
                 {combinedGroups.map((group) => (
-                <div
-                  key={`${group.variant}-${group.id}`}
-                  style={{
-                    display: 'inline-block',
-                    verticalAlign: 'top',
-                    marginRight: '12px',  // espace horizontal entre conteneurs
-                    marginBottom: '12px', // espace vertical entre les lignes
-                  }}
-                >
-                  <ProductGroupContainer
-                    group={group}
-                    canSave={canSaveProduct}
-                    deckIds={deckIds}
-                    onSave={onAddToDeck}
-                    onRemoveFromDeck={onRemoveFromDeck}
-                    onToggleSelection={toggleSelection}
-                    onCreateOrder={onStartOrderFromProduct}
-                    onOpenProduct={onOpenProduct}
-                    onOpenOrder={onOpenOrder}
-                    onOpenProducer={onOpenProducer}
-                  />
-                </div>
-              ))}
+                  <div
+                    key={`${group.variant}-${group.id}`}
+                    style={{
+                      display: 'flex',
+                    }}
+                  >
+                    <ProductGroupContainer
+                      group={group}
+                      canSave={canSaveProduct}
+                      deckIds={deckIds}
+                      onSave={onAddToDeck}
+                      onRemoveFromDeck={onRemoveFromDeck}
+                      onToggleSelection={toggleSelection}
+                      onCreateOrder={onStartOrderFromProduct}
+                      onOpenProduct={onOpenProduct}
+                      onOpenOrder={onOpenOrder}
+                      onOpenProducer={onOpenProducer}
+                    />
+                  </div>
+                ))}
               </div>
             </div>
           ) : (
@@ -489,7 +485,7 @@ export function ProductsLanding({
         ) : showProducts ? (
           hasProducts ? (
             <div className="px-1 sm:px-3 w-full">
-              <div className="flex flex-wrap gap-3 items-stretch w-full justify-start">
+              <div className="flex flex-wrap gap-3 items-stretch w-full justify-center">
                 {productResults.map((product) => (
                   <ProductResultCard
                     key={product.id}
@@ -522,17 +518,16 @@ export function ProductsLanding({
         ) : hasProducers ? (
           <div className="px-1 sm:px-3 w-full">
             <div
-              className="mx-auto"
+              className="mx-auto flex flex-wrap justify-center gap-3"
               style={{
                 maxWidth: '1200px',
-                textAlign: 'left',
                 whiteSpace: 'normal',
               }}
             >
               {producerGroups.map((group) => (
                 <div
                   key={`producer-${group.id}`}
-                  className="inline-block align-top mr-4 mb-4"
+                  className="flex"
                 >
                   <ProductGroupContainer
                     group={group}
