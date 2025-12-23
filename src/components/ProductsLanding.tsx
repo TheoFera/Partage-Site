@@ -1,15 +1,12 @@
 import React from 'react';
 import { Product, GroupOrder, DeckCard } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { FiltersPopover } from './FiltersPopover';
 import {
-  SlidersHorizontal,
   Sparkles,
-  Users,
   MapPin,
-  ArrowRight,
   ChevronLeft,
   ChevronRight,
-  Leaf,
   Heart,
 } from 'lucide-react';
 import {
@@ -182,28 +179,6 @@ const getProductAttributes = (product: Product) => {
 
   return attributes;
 };
-
-const FilterPill = ({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className={`px-3 py-1.5 rounded-full border text-sm transition-colors ${
-      active
-        ? 'bg-[#FF6B4A]/10 border-[#FF6B4A] text-[#B45309]'
-        : 'bg-white border-gray-200 text-[#374151] hover:border-[#FF6B4A]/50'
-    }`}
-  >
-    {label}
-  </button>
-);
 
 export function ProductsLanding({
   products,
@@ -393,6 +368,29 @@ export function ProductsLanding({
 
   return (
     <div className="space-y-6">
+      <FiltersPopover
+        open={filtersOpen}
+        onClose={onToggleFilters}
+        scope={scope}
+        onScopeChange={setScope}
+        categories={categories}
+        onToggleCategory={(id) =>
+          setCategories((prev) => (prev.includes(id) ? prev.filter((val) => val !== id) : [...prev, id]))
+        }
+        producerFilters={producerFilters}
+        onToggleProducer={(id) =>
+          setProducerFilters((prev) =>
+            prev.includes(id) ? prev.filter((val) => val !== id) : [...prev, id]
+          )
+        }
+        attributes={attributes}
+        onToggleAttribute={(id) =>
+          setAttributes((prev) => (prev.includes(id) ? prev.filter((val) => val !== id) : [...prev, id]))
+        }
+        productOptions={productFilterOptions}
+        producerOptions={producerFilterOptions}
+        attributeOptions={attributeFilterOptions}
+      />
       <div
         style={{
           position: 'relative',
@@ -478,57 +476,7 @@ export function ProductsLanding({
       </section>
       </div>
 
-      {filtersOpen && (
-        <section className="bg-white rounded-3xl shadow-sm border border-gray-100 p-4 sm:p-6 -mt-12 relative z-10 space-y-4">
-          <div className="flex flex-col lg:flex-row gap-3 lg:items-center">
-            <div className="flex items-center gap-2 flex-wrap">
-              <ScopeToggle active={scope === 'combined'} label="Tous" onClick={() => setScope('combined')} />
-              <ScopeToggle active={scope === 'products'} label="Produits" onClick={() => setScope('products')} />
-              <ScopeToggle active={scope === 'producers'} label="Producteurs" onClick={() => setScope('producers')} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3">
-            <FilterGroup
-              label="Filtres produits"
-              icon={<SlidersHorizontal className="w-4 h-4" />}
-              options={productFilterOptions}
-              activeValues={categories}
-              onToggle={(id) =>
-                setCategories((prev) => (prev.includes(id) ? prev.filter((val) => val !== id) : [...prev, id]))
-              }
-            />
-            <FilterGroup
-              label="Filtres producteurs"
-              icon={<Users className="w-4 h-4" />}
-              options={producerFilterOptions}
-              activeValues={producerFilters}
-              onToggle={(id) =>
-                setProducerFilters((prev) => (prev.includes(id) ? prev.filter((val) => val !== id) : [...prev, id]))
-              }
-            />
-            <FilterGroup
-              label="Caractéristiques"
-              icon={<Leaf className="w-4 h-4" />}
-              options={attributeFilterOptions}
-              activeValues={attributes}
-              onToggle={(id) =>
-                setAttributes((prev) => (prev.includes(id) ? prev.filter((val) => val !== id) : [...prev, id]))
-              }
-            />
-          </div>
-          <div className="ml-auto">
-              <button
-                type="button"
-                onClick={onToggleFilters}
-                className="text-sm text-[#FF6B4A] font-semibold hover:text-[#FF5A39]"
-              >
-                Fermer
-              </button>
-            </div>
-        </section>
-      )}
-              <section className="space-y-4">
+      <section className="space-y-4">
         {showCombined ? (
           combinedGroups.length ? (
             <div className="px-1 sm:px-3 w-full">
@@ -669,90 +617,6 @@ export function ProductsLanding({
   );
 }
 
-function ScopeToggle({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`px-3 py-2 rounded-xl border text-sm font-semibold transition-colors ${
-        active
-          ? 'bg-[#FF6B4A] border-[#FF6B4A] text-white shadow-sm'
-          : 'bg-white border-gray-200 text-[#374151] hover:border-[#FF6B4A]/60'
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function ToggleButton({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`px-3 py-2 rounded-xl border text-sm transition-colors inline-flex items-center gap-2 ${
-        active
-          ? 'bg-[#E6F6F0] border-[#C8EBDD] text-[#0F5132]'
-          : 'bg-white border-gray-200 text-[#374151] hover:border-[#FF6B4A]/60'
-      }`}
-    >
-      <SlidersHorizontal className="w-4 h-4" />
-      {label}
-    </button>
-  );
-}
-
-function FilterGroup({
-  label,
-  icon,
-  options,
-  activeValues,
-  onToggle,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  options: Array<{ id: string; label: string }>;
-  activeValues: string[];
-  onToggle: (id: string) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 text-sm text-[#374151]">
-        <span className="w-8 h-8 rounded-full bg-[#F9FAFB] border border-gray-200 flex items-center justify-center">
-          {icon}
-        </span>
-        <p className="font-semibold">{label}</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {options.map((option) => (
-          <FilterPill
-            key={option.id}
-            label={option.label}
-            active={activeValues.includes(option.id)}
-            onClick={() => onToggle(option.id)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function ProductResultCard({
   product,
   related: _related,
@@ -889,7 +753,7 @@ export function ProductResultCard({
           <span className="text-lg font-semibold text-[#FF6B4A]">
             {product.price.toFixed(2)} €
           </span>
-          <span className="text-[10px] px-0 py-0.5 bg-[#F9FAFB] text-[#374151]">
+          <span className="text-[10px] px-0 py-0.5 text-[#374151] bg-transparent">
             {measurementLabel} ({product.unit})
           </span>
         </div>
@@ -1470,4 +1334,3 @@ function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
     </div>
   );
 }
-
