@@ -734,7 +734,7 @@ export default function App() {
     (product: Product) => ({
       link: getAbsoluteLink(`/produit/${product.id}`),
       title: product.name,
-      subtitle: `${product.producerName} - ${product.price.toFixed(2)} EUR / ${product.unit}`,
+      subtitle: `${product.producerName} - ${product.price.toFixed(2)} € / ${product.unit}`,
       description:
         'Scannez pour decouvrir tous les details du produit, son lieu de production et la repartition de la valeur.',
       details: [
@@ -1980,8 +1980,6 @@ export default function App() {
           </div>
         ) : isProductView && selectedProduct ? (
           <div className="mb-6">
-            <h1 className="text-[#1F2937]">{selectedProduct.name}</h1>
-            <p className="text-[#6B7280]">{selectedProduct.producerName}</p>
           </div>
         ) : isAuthPage ? (
           hideAuthTitle ? null : (

@@ -63,7 +63,7 @@ const LABEL_DESCRIPTIONS: Record<string, string> = {
   'label rouge': 'Qualite superieure controlee sur toute la filiere.',
   hve: 'Haute Valeur Environnementale, pratiques durables.',
   'bleu blanc coeur': 'Alimentation specifique et tracabilite nutritionnelle.',
-  tracable: 'Chaque lot est trace et documente.',
+  traçable: 'Chaque lot est trace et documente.',
   'circuit court': "Peu d'intermediaires, relation directe.",
   'frais controle': 'Respect du froid et controles reguliers.',
 };
@@ -466,7 +466,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     onOpenProducer?.(product);
   }, [onOpenProducer, product]);
 
-  const measurementLabel = product.measurement === 'kg' ? '/ Kg' : '/ unite';
+  const measurementLabel = product.measurement === 'kg' ? '/ Kg' : '/ unité';
   const displayCategory = display.category || product.category;
   const displayImage = display.productImage?.url || product.imageUrl;
   const displayProducer = display.producer ?? detail.producer;
@@ -508,9 +508,6 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
             <div>
               <p className="pd-section-title">Parcours du produit</p>
-              <p className="pd-text-xs pd-text-muted">
-                Production &gt; Transformation &gt; (Abattage) &gt; Conditionnement &gt; Retrait
-              </p>
             </div>
             {editMode ? (
               <button
@@ -762,7 +759,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 ? `Lecture en ${detail.repartitionValeur.uniteReference} - ${
                     detail.repartitionValeur.mode === 'detaille' ? 'Detaille' : 'Estimatif'
                   }`
-                : "Le producteur n'a pas encore renseigne la repartition"}
+                : "Le producteur n'a pas encore renseigné la repartition"}
             </p>
           </div>
           {detail.repartitionValeur?.totalReference ? (
@@ -772,7 +769,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           ) : null}
         </div>
         {localPosts.length === 0 ? (
-          <p className="pd-text-sm pd-text-muted">Le producteur n'a pas encore renseigne la repartition.</p>
+          <p className="pd-text-sm pd-text-muted">Le producteur n'a pas encore renseigné la repartition.</p>
         ) : (
           <div className="pd-stack pd-stack--md">
             <ValuePieChart
@@ -883,12 +880,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         <div className="pd-card pd-stack pd-stack--md">
           <div className="pd-row pd-gap-sm">
             <MapPin className="pd-icon pd-icon--accent" />
-            <p className="pd-section-title">Repartition des lieux d'achats</p>
+            <p className="pd-section-title">Répartition des lieux d'achats</p>
           </div>
           <div className="pd-map">
             <div className="pd-map__label">
               <MapPin size={16} />
-              <span>Carte des achats (prototype)</span>
+              <span>Carte des achats</span>
             </div>
           </div>
           <div className="pd-row pd-row--wrap pd-gap-sm">
@@ -1338,17 +1335,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   onChange={(e) => setDraft((prev) => ({ ...prev, category: e.target.value }))}
                   placeholder="Categorie"
                 />
-                <input
-                  className="pd-input"
-                  value={draft.shortDescription || ''}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, shortDescription: e.target.value }))}
-                  placeholder="Description courte"
-                />
                 <textarea
                   className="pd-textarea"
                   value={draft.longDescription || ''}
                   onChange={(e) => setDraft((prev) => ({ ...prev, longDescription: e.target.value }))}
-                  placeholder="Description detaillee"
+                  placeholder="Description detaillée"
                   rows={3}
                 />
               </div>
@@ -1383,8 +1374,6 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 </p>
               </div>
             </button>
-
-            {displayProducer.shortStory ? <p className="pd-callout">{displayProducer.shortStory}</p> : null}
 
             <div className="pd-row pd-row--wrap pd-gap-sm pd-text-sm">
               <span className="pd-price">{product.price.toFixed(2)} €</span>

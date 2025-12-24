@@ -43,7 +43,7 @@ export const mockProductDetails: Record<string, ProductDetail> = {
       mention: 'Prix indicatif, depend des commandes',
     },
     officialBadges: ['AOP'],
-    platformBadges: ['Tracable', 'Circuit court', 'Frais controle'],
+    platformBadges: ['Traçable', 'Circuit court', 'Frais controle'],
     productionConditions: {
       modeProduction: 'Paturage extensif, foin ferme en hiver',
       intrantsPesticides: {
@@ -364,7 +364,7 @@ export const buildDefaultProductDetail = (product: Product): ProductDetail => {
     conditionnementPrincipal: product.unit,
     formats,
     officialBadges: product.description.toLowerCase().includes('bio') ? ['BIO'] : [],
-    platformBadges: [chaineDuFroid ? 'Chaine du froid' : 'Sans froid', 'Tracable', 'Infos producteur'],
+    platformBadges: [chaineDuFroid ? 'Chaine du froid' : 'Sans froid', 'Traçable', 'Infos producteur'],
     productionConditions: {
       modeProduction: pickOne(['Ferme familiale', 'Artisanal', 'Cooperative locale'], seed + 7),
       intrantsPesticides: {
