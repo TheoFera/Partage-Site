@@ -702,6 +702,10 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [location.pathname]);
   const supabaseClient = React.useMemo<SupabaseClient | null>(() => {
     try {
       return getSupabaseClient();

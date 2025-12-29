@@ -728,7 +728,7 @@ export function CreateOrderForm({
                   type="text"
                   value={deliveryInfo}
                   onChange={(e) => setDeliveryInfo(e.target.value)}
-                  placeholder="Informations complementaires à l'adresse : Lieu précis, bâtiment, étage, code d'entrée"
+                  placeholder="Informations complémentaires : Lieu précis, bâtiment, étage, code d'entrée"
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                 />
               </div>
@@ -979,7 +979,7 @@ export function CreateOrderForm({
                 Meme adresse de retrait que de livraison
               </label>
               {useSamePickupAddress ? (
-                <p className="text-xs text-[#6B7280]">L'adresse de livraison sera utilisee pour le retrait.</p>
+                <p className="text-xs text-[#6B7280]">L'adresse précise n'est communiquée aux participants qu'après paiement.</p>
               ) : (
                 <div className="space-y-3">
                   <label className="block text-sm text-[#6B7280]">Adresse de retrait</label>
@@ -995,12 +995,11 @@ export function CreateOrderForm({
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-[#6B7280]">Informations complementaires a l'adresse</label>
                     <input
                       type="text"
                       value={pickupInfo}
                       onChange={(e) => setPickupInfo(e.target.value)}
-                      placeholder="Batiment, etage, code entree"
+                      placeholder="Informations complémentaires : Lieu précis, bâtiment, étage, code d'entrée"
                       className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -1028,7 +1027,7 @@ export function CreateOrderForm({
                     </div>
                   </div>
                   <p className="text-xs text-[#6B7280]">
-                    L'adresse precise n'est communiquee aux participants qu'apres paiement.
+                    L'adresse précise n'est communiquée aux participants qu'après paiement.
                   </p>
                 </div>
               )}

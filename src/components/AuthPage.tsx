@@ -242,7 +242,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                       type="tel"
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      placeholder="+33..."
+                      placeholder="06 00 00 00 00"
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#FF6B4A]"
                       required
                     />

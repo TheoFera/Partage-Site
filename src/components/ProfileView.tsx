@@ -1036,17 +1036,14 @@ function ProfileEditPanel({
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
               <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Telephone (obligatoire)</label>
+                <label className="block text-sm text-[#6B7280]">Téléphone (obligatoire)</label>
                 <input
                   type="tel"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                  placeholder="06 75 02 63 91"
+                  placeholder="06 00 00 00 00"
                 />
-                <p className="text-xs text-[#9CA3AF]">
-                  Stocke dans profiles.phone. Option future: auth.users.phone avec OTP.
-                </p>
               </div>
             </div>
           </div>
