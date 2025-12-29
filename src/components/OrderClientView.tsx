@@ -35,7 +35,7 @@ function formatPrice(value: number) {
   return `${value.toFixed(2)} EUR`;
 }
 
-function labelForDay(day: string) {
+function labelForDay(day?: string) {
   const map: Record<string, string> = {
     monday: 'Lundi',
     tuesday: 'Mardi',
@@ -45,7 +45,19 @@ function labelForDay(day: string) {
     saturday: 'Samedi',
     sunday: 'Dimanche',
   };
+  if (!day) return '';
   return map[day] ?? day;
+}
+
+function formatPickupSlotLabel(slot: GroupOrder['pickupSlots'][number]) {
+  if (slot.date) {
+    const date = new Date(slot.date);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toLocaleDateString('fr-FR');
+    }
+    return slot.date;
+  }
+  return labelForDay(slot.label ?? slot.day);
 }
 
 function getProductWeightKg(product: GroupOrder['products'][number]) {
@@ -139,9 +151,26 @@ const mockParticipantProfiles: Array<Pick<OrderParticipant, 'id' | 'name' | 'han
 ];
 
 const buildMockParticipants = (order: GroupOrder): OrderParticipant[] => {
-  const targetCount = Math.min(Math.max(order.participants ?? 0, 0), mockParticipantProfiles.length);
-  if (!targetCount) return [];
-  return mockParticipantProfiles.slice(0, targetCount).map((participant, index) => {
+  const participants: OrderParticipant[] = [];
+  const sharerQuantities = order.sharerQuantities ?? {};
+  const hasSharerSelection = Object.values(sharerQuantities).some((qty) => qty > 0);
+
+  if (hasSharerSelection) {
+    const quantities: Record<string, number> = {};
+    order.products.forEach((product) => {
+      quantities[product.id] = Math.max(0, Number(sharerQuantities[product.id]) || 0);
+    });
+    participants.push({
+      id: `${order.id}-sharer`,
+      name: `${order.sharerName} (partageur)`,
+      quantities,
+    });
+  }
+
+  const baseCount = Math.min(Math.max(order.participants ?? 0, 0), mockParticipantProfiles.length);
+  const targetCount = hasSharerSelection ? Math.max(baseCount - 1, 0) : baseCount;
+
+  const mockParticipants = mockParticipantProfiles.slice(0, targetCount).map((participant, index) => {
     const quantities: Record<string, number> = {};
     order.products.forEach((product, productIndex) => {
       const qty = ((index + 1) * (productIndex + 2)) % 3;
@@ -155,6 +184,8 @@ const buildMockParticipants = (order: GroupOrder): OrderParticipant[] => {
       quantities,
     };
   });
+
+  return [...participants, ...mockParticipants];
 };
 
 export function OrderClientView({
@@ -299,7 +330,7 @@ export function OrderClientView({
 
   const pickupLine = order.pickupSlots?.length
     ? order.pickupSlots
-        .map((slot) => `${labelForDay(slot.label ?? slot.day)} ${slot.start ?? ''}-${slot.end ?? ''}`)
+        .map((slot) => `${formatPickupSlotLabel(slot)} ${slot.start ?? ''}-${slot.end ?? ''}`)
         .join(' / ')
     : order.message || 'Voir message de retrait';
   const deadlineDate = order.deadline instanceof Date ? order.deadline : new Date(order.deadline);

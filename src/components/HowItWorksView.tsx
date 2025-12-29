@@ -50,7 +50,6 @@ export function HowItWorksView() {
         <div className="how-hero__content">
           <h1 className="how-hero__title">Comment ça fonctionne ?</h1>
           <p className="how-hero__subtitle">
-            Tu trouves une commande de produits qui t'intéresse, tu cliques sur participer. Quand le partageur est livré, tu viens récupérer ta commande.
             S'approvisionner directement auprès des producteurs n'a jamais été aussi simple.
           </p>
         </div>
@@ -88,7 +87,7 @@ export function HowItWorksView() {
             onClick={() => scrollToSection('participant')}
             aria-controls="participant"
             >
-            Participer à des commandes groupées en direct des producteurs
+            Participer à des commandes groupées de produits en direct des producteurs
             </button>
             <button
             type="button"
@@ -104,7 +103,7 @@ export function HowItWorksView() {
             onClick={() => scrollToSection('producteur')}
             aria-controls="producteur"
             >
-            Rendre mes produits accessibles via la plateforme
+            Rendre mes produits accessibles via la plateforme en tant que producteur
             </button>
           </div>
         </div>
@@ -258,7 +257,7 @@ export function HowItWorksView() {
             />
             <p className="how-card__text">
             Je dois alors sélectionner :
-              <ul className="about-list">
+              <ul className="how-list">
                 <li>les produits du producteur que je veux inclure dans la commande</li>
                 <li>Le poids minimum ou maximum de la commande </li>
                 <li>La date de cloture de la commande</li>
@@ -325,7 +324,7 @@ export function HowItWorksView() {
           Tu gardes la main sur tes produits, tes disponibilités et les conditions pour que chaque
           commande soit simple à préparer.
         </p>
-        <div className="how-grid how-grid--three">
+        <div className="how-section__content">
           <article className="how-card">
             <h3 className="how-card__title">1) J’ajoute mes produits et mes lots</h3>
             <p className="how-card__text">
@@ -392,6 +391,21 @@ export function HowItWorksView() {
           </article>
         </div>
       </section>
+
+      <section className="how-cta-final">
+              <h2>Envie de découvrir qui se cache derrière « Partage » ?</h2>
+              <p className="cta-final__text">
+                Nous expliquons qui nous sommes et l'ensemble de notre démarche
+              </p>
+              <div className="cta-final__actions">
+                <Link to="/qui-sommes-nous" className="how-button how-button--primary">
+                  Découvrir qui nous sommes
+                </Link>
+                <Link to="/" className="how-button how-button--ghost">
+                  Découvrir les produits
+                </Link>
+              </div>
+            </section>
     </div>
   );
 }

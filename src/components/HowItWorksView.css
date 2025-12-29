@@ -228,8 +228,23 @@
 .how-section__actions {
   display: flex;
   flex-direction: column;
+  flex-wrap: wrap;
   gap: 12px;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  text-align: center;
+  position: relative;
+  padding-block: 6px;
+}
+
+.how-section__actions .how-button {
+  text-align: center;
+}
+
+.how-section__actions::before,
+.how-section__actions::after {
+  content: none;
 }
 
 .how-card {
@@ -365,6 +380,23 @@
   .how-section__actions {
     flex-direction: row;
     align-items: center;
+    justify-content: center;
+  }
+
+  .how-section__actions::before,
+  .how-section__actions::after {
+    content: '';
+    flex: 1 1 140px;
+    height: 2px;
+    border-radius: 9999px;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 107, 74, 0) 0%,
+      rgba(255, 107, 74, 0.6) 50%,
+      rgba(255, 107, 74, 0) 100%
+    );
+    box-shadow: 0 10px 24px -16px rgba(255, 107, 74, 0.6);
+    max-width: 260px;
   }
 
   .how-cta-final__actions {

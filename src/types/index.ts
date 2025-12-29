@@ -1,4 +1,6 @@
 export type UserRole = 'producer' | 'sharer' | 'participant';
+export type DeliveryLeadType = 'days' | 'fixed_day';
+export type DeliveryDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
 
 export interface User {
   id: string;
@@ -12,6 +14,7 @@ export interface User {
   tagline?: string;
   website?: string;
   address?: string;
+  addressDetails?: string;
   city?: string;
   postcode?: string;
   phone?: string;
@@ -34,6 +37,22 @@ export interface LegalEntity {
   siret: string;
   vatNumber?: string;
   entityType: 'company' | 'association' | 'public_institution';
+  deliveryLeadType?: DeliveryLeadType;
+  deliveryLeadDays?: number;
+  deliveryFixedDay?: DeliveryDay;
+  chronofreshEnabled?: boolean;
+  chronofreshMinWeight?: number;
+  chronofreshMaxWeight?: number;
+  producerDeliveryEnabled?: boolean;
+  producerDeliveryDays?: DeliveryDay[];
+  producerDeliveryMinWeight?: number;
+  producerDeliveryMaxWeight?: number;
+  producerPickupEnabled?: boolean;
+  producerPickupDays?: DeliveryDay[];
+  producerPickupStartTime?: string;
+  producerPickupEndTime?: string;
+  producerPickupMinWeight?: number;
+  producerPickupMaxWeight?: number;
 }
 
 export interface Product {
@@ -66,6 +85,7 @@ export interface GroupOrder {
   producerId: string;
   producerName: string;
   sharerPercentage: number;
+  sharerQuantities?: Record<string, number>;
   minWeight: number;
   maxWeight: number;
   orderedWeight?: number;
@@ -80,7 +100,8 @@ export interface GroupOrder {
   totalValue: number;
   participants: number;
   pickupSlots?: Array<{
-    day: string;
+    day?: string;
+    date?: string;
     start?: string;
     end?: string;
     label?: string;

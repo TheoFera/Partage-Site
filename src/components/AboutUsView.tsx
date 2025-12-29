@@ -25,8 +25,8 @@ export function AboutUsView() {
               fondé en 2025 par Théo Fera, professionnel de l'alimentaire.
             </p>
             <p className="about-hero__subtitle"> 
-              Son ambition est de participer à trouver des solutions face à la crise agricole et 
-              à la transformation de nos modes de consommations alimentaires en proposant un nouveau modèle de distribution, 
+              Son ambition est de contribuer à trouver des solutions face à la crise agricole tout en proposant des
+              produits de qualité accessible à tous, via un modèle de distribution 
               plus direct et collaboratif.
             </p>
             
@@ -92,16 +92,17 @@ export function AboutUsView() {
 
       <section className="about-section">
         <p className="about-section__intro">
-        Notre diagnostic sur les différents modèles :
+        Notre diagnostic sur les différents modèles d'approvisionnement direct producteur :
         </p>
         <div className="about-grid about-grid--three">
           <article className="about-card">
             <h3 className="about-card__title">AMAP (Association pour le maintien d'une agriculture paysanne)</h3>
             <ul className="about-list">
               <li>Exige un engagement dans la durée</li>
-              <li>Des jours et horaires de récupération parfois contraignantes</li>
+              <li>Des jours, lieux et horaires de récupération parfois contraignants</li>
               <li>On ne choisit pas le contenu de son panier</li>
-              <li>Repose sur le bénévolat</li>
+              <li>Une partie dun fonctionnement d'une AMAP repose sur le bénévolat</li>
+              <li>Les amapiens sont peu diversifiés socialement</li>
             </ul>
           </article>
           <article className="about-card">
@@ -111,75 +112,85 @@ export function AboutUsView() {
               <li>Nécessite d'organiser la prise de commande dans un tableau</li>
               <li>Échanges d’argent en liquide et personnes devant parfois avancer l'argent</li>
               <li>Repose sur la bonne volonté des participants</li>
+              <li>Les personnes qui pourraient être intéressées autour de vous ne sont pas au courant</li>
             </ul>
           </article>
           <article className="about-card">
-            <h3 className="about-card__title">Achat en ligne sur des sites de producteur</h3>
+            <h3 className="about-card__title">Achat en ligne sur des sites proposant des produits</h3>
             <ul className="about-list">
               <li>On achète seulement pour soi</li>
               <li>Les frais d’expédition engendrent des prix chers ou poussent à commander en gros</li>
               <li>Résultat : on n’achète pas souvent, ou seulement ponctuellement</li>
               <li>On n'entre pas vraiment en lien avec le producteur</li>
+              <li>Le producteur doit pouvoir gérer plein de petites commandes</li>
+            </ul>
+          </article>
+        </div>
+          <p className="about-section__intro">
+            Les forces de « Partage » :
+          </p>
+        <div className="about-grid about-grid--three">
+          <article className="about-card">
+            <h3 className="about-card__title">L'avantage d'un achat classique en ligne</h3>
+            <ul className="about-list">
+              <li>Pas d'engagement sur la durée nécessaire</li>
+              <li>De plus grandes plages de récupération des produits et plus proche de chez vous</li>
+              <li>On choisit précisement le contenu de sa commande</li>
+              <li>Tout le monde y trouve son compte et a un intérêt économique à participer</li>
+              <li>Aucune barrière sociale à l'entrée</li>
+            </ul>
+          </article>
+          <article className="about-card">
+            <h3 className="about-card__title">La commande groupée, mais sans la galère</h3>
+            <ul className="about-list">
+              <li>Partage fait le travail d'identifier de bons producteurs.</li>
+              <li>La prise de commande est gérée par le site</li>
+              <li>Pas d'échange d'argent entre les participants, tout est géré par le site</li>
+              <li>La simplicité permet d'en faire plus souvent</li>
+              <li>Vous pouvez facilement partager l'information de votre commande aux gens autour pour qu'ils y participent</li>
+            </ul>
+          </article>
+          <article className="about-card">
+            <h3 className="about-card__title">Les bénéfices de la jouer collectif</h3>
+            <ul className="about-list">
+              <li>On profite des avantages d'acheter en groupe</li>
+              <li>On divise les frais d’expédition et on peut acheter dans des petites quantités</li>
+              <li>Résultat : on participe à des commandes plus souvent</li>
+              <li>On connait tout de son produit et on peut échanger et faire notre retour au producteur</li>
+              <li>Le producteur n'a de petites commandes contraignantes à gérer</li>
             </ul>
           </article>
         </div>
       </section>
 
+        <section className="about-section">
+        <div className="about-section__header">
+          <h2>Ainsi grâce à « Partage » :</h2>
       
           <div className="about-badges">
               <span className="about-badge">
-                <LinkIcon className="about-badge__icon" aria-hidden="true" />
-                Circuits-courts
-              </span>
-              <span className="about-badge">
                 <Award className="about-badge__icon" aria-hidden="true" />
-                Produits de qualité
+                Procurez-vous de bons produits de qualité plus simplement et donc plus souvent
               </span>
               <span className="about-badge">
                 <Scale className="about-badge__icon" aria-hidden="true" />
-                Juste rémunèration
+                Donner aux prix du sens et rémunérez mieux les producteurs, en plus de leur faciliter la vie
               </span>
               <span className="about-badge">
                 <Handshake className="about-badge__icon" aria-hidden="true" />
-                Coopération
+                Coopérez avec vos amis, vos collègues et vos voisins et trouvez-y un intérêt financier
               </span>
               <span className="about-badge">
                 <Search className="about-badge__icon" aria-hidden="true" />
-                Transparence
+                Faites confiance à ce que vous mangez grâce à des informations vraiment utiles
+              </span>
+              <span className="about-badge">
+                <LinkIcon className="about-badge__icon" aria-hidden="true" />
+                Participez à réinventer la distribution alimentaire
               </span>
             </div>
-
-        <section className="about-section">
-        <div className="about-section__header">
-          <h2>Les objectifs que « Partage » s'est fixé</h2>
-          <p className="about-section__intro">
-            Acheter de bons produits en direct des producteurs, à des prix
-            accessibles, avec une organisation simple.
-          </p>
         </div>
-        <div className="about-grid about-grid--three">
-          <article className="about-card">
-            <h3 className="about-card__title">Acheter en petites quantités</h3>
-            <p className="about-card__text">
-              Pouvoir commander ce dont on a besoin, sans devoir ‘faire un gros panier’ juste pour
-              rentabiliser des frais.
-            </p>
-          </article>
-          <article className="about-card">
-            <h3 className="about-card__title">La commande groupée, mais sans la galère</h3>
-            <p className="about-card__text">
-              Retrouver l’efficacité des commandes groupées, tout en évitant l’organisation
-              compliquée, les relances et les échanges d’argent entre personnes.
-            </p>
-          </article>
-          <article className="about-card">
-            <h3 className="about-card__title">Une transparence beaucoup plus profonde</h3>
-            <p className="about-card__text">
-              On ne connaît pas assez nos produits aujourd’hui. Partage veut permettre de comprendre
-              dans la plus grande intimité ce qu’on mange, et de choisir en pleine connaissance.
-            </p>
-          </article>
-        </div>
+       
         <div className="about-subsection">
           <h3>Les informations de traçabilité que vous n'aurez nul part ailleurs :</h3>
           <ul className="about-list about-list--compact">
@@ -190,28 +201,25 @@ export function AboutUsView() {
             <li>La possibilité d'entrer en contact directement avec le producteur qui vous fournit</li>
             <li>Des informations de qualité inédites</li>
           </ul>
-        </div>
+          
         <p className="about-section__note">
           L’idée n’est pas d’ajouter du blabla, mais de rendre visibles les informations
-          essentielles qui manquent aujourd’hui.
+          essentielles qui manquent aujourd’hui pour vraiment connaître les produits que l'on consomme
+          et acheter en toute connaissance de cause.
         </p>
-      </section>
+        </div>
 
-      <section className="about-section">
-        <h2>Ce qu’on veut rendre possible</h2>
-        <ul className="about-list">
-          <li>Acheter local plus souvent, sans contrainte</li>
-          <li>Faciliter la vie des producteurs, sans micro-gestion</li>
-          <li>Rendre les commandes groupées naturelles et simples</li>
-          <li>Donner accès à des prix accessibles grâce au collectif</li>
-          <li>Mieux choisir grâce à une information vraiment utile</li>
-        </ul>
+        
+          <p className="about-section__intro">
+            Acheter de bons produits en direct des producteurs à des prix
+            accessibles n'a jamais été aussi simple.
+          </p>
       </section>
 
       <section className="about-cta">
-        <h2>Envie de découvrir le fonctionnement ?</h2>
+        <h2>Envie de découvrir comment fonctionne « Partage » ?</h2>
         <p className="about-cta__text">
-          Tout est expliqué étape par étape, avec les rôles et les options possibles.
+          Tout est expliqué étape par étape, en fonction de ce que vous souhaitez faire, avec les différentes options possibles.
         </p>
         <div className="about-cta__actions">
           <Link to="/comment-ca-fonctionne" className="about-button about-button--primary">

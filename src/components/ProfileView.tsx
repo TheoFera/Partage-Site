@@ -15,12 +15,22 @@ import {
   Phone,
   Building2,
 } from 'lucide-react';
-import { DeckCard, GroupOrder, Product, User } from '../types';
+import { DeckCard, DeliveryDay, DeliveryLeadType, GroupOrder, Product, User } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from './ProductsLanding';
 import { toast } from 'sonner';
 
 type TabKey = 'products' | 'orders' | 'selection';
+
+const deliveryDayOptions: Array<{ id: DeliveryDay; label: string }> = [
+  { id: 'monday', label: 'Lundi' },
+  { id: 'tuesday', label: 'Mardi' },
+  { id: 'wednesday', label: 'Mercredi' },
+  { id: 'thursday', label: 'Jeudi' },
+  { id: 'friday', label: 'Vendredi' },
+  { id: 'saturday', label: 'Samedi' },
+  { id: 'sunday', label: 'Dimanche' },
+];
 
 const statusLabels: Record<GroupOrder['status'], string> = {
   open: 'Ouverte',
@@ -541,6 +551,7 @@ function ProfileEditPanel({
   const defaultHandle = user.handle ?? user.name.toLowerCase().replace(/\s+/g, '');
   const [name, setName] = React.useState(user.name);
   const [address, setAddress] = React.useState(user.address || '');
+  const [addressDetails, setAddressDetails] = React.useState(user.addressDetails || '');
   const [role, setRole] = React.useState<'producer' | 'sharer' | 'participant'>(user.role);
   const [handleValue, setHandleValue] = React.useState(defaultHandle);
   const [profileImage, setProfileImage] = React.useState(user.profileImage ?? '');
@@ -581,6 +592,54 @@ function ProfileEditPanel({
     React.useState<'company' | 'association' | 'public_institution'>(
       (user.legalEntity?.entityType as any) ?? 'company'
     );
+  const [deliveryLeadType, setDeliveryLeadType] = React.useState<DeliveryLeadType>(
+    user.legalEntity?.deliveryLeadType ?? 'days'
+  );
+  const [deliveryLeadDays, setDeliveryLeadDays] = React.useState<number>(
+    user.legalEntity?.deliveryLeadDays ?? 5
+  );
+  const [deliveryFixedDay, setDeliveryFixedDay] = React.useState<DeliveryDay>(
+    user.legalEntity?.deliveryFixedDay ?? 'monday'
+  );
+  const [chronofreshEnabled, setChronofreshEnabled] = React.useState<boolean>(
+    Boolean(user.legalEntity?.chronofreshEnabled)
+  );
+  const [chronofreshMinWeight, setChronofreshMinWeight] = React.useState<number>(
+    user.legalEntity?.chronofreshMinWeight ?? 0
+  );
+  const [chronofreshMaxWeight, setChronofreshMaxWeight] = React.useState<number>(
+    user.legalEntity?.chronofreshMaxWeight ?? 0
+  );
+  const [producerDeliveryEnabled, setProducerDeliveryEnabled] = React.useState<boolean>(
+    Boolean(user.legalEntity?.producerDeliveryEnabled)
+  );
+  const [producerDeliveryDays, setProducerDeliveryDays] = React.useState<DeliveryDay[]>(
+    user.legalEntity?.producerDeliveryDays ?? []
+  );
+  const [producerDeliveryMinWeight, setProducerDeliveryMinWeight] = React.useState<number>(
+    user.legalEntity?.producerDeliveryMinWeight ?? 0
+  );
+  const [producerDeliveryMaxWeight, setProducerDeliveryMaxWeight] = React.useState<number>(
+    user.legalEntity?.producerDeliveryMaxWeight ?? 0
+  );
+  const [producerPickupEnabled, setProducerPickupEnabled] = React.useState<boolean>(
+    Boolean(user.legalEntity?.producerPickupEnabled)
+  );
+  const [producerPickupDays, setProducerPickupDays] = React.useState<DeliveryDay[]>(
+    user.legalEntity?.producerPickupDays ?? []
+  );
+  const [producerPickupStartTime, setProducerPickupStartTime] = React.useState<string>(
+    user.legalEntity?.producerPickupStartTime ?? '09:00'
+  );
+  const [producerPickupEndTime, setProducerPickupEndTime] = React.useState<string>(
+    user.legalEntity?.producerPickupEndTime ?? '17:00'
+  );
+  const [producerPickupMinWeight, setProducerPickupMinWeight] = React.useState<number>(
+    user.legalEntity?.producerPickupMinWeight ?? 0
+  );
+  const [producerPickupMaxWeight, setProducerPickupMaxWeight] = React.useState<number>(
+    user.legalEntity?.producerPickupMaxWeight ?? 0
+  );
   const previewImageSrc = profileImage.trim() || DEFAULT_PROFILE_AVATAR;
   const handleProfileImageUpload = (file?: File) => {
     if (!file) return;
@@ -591,6 +650,12 @@ function ProfileEditPanel({
       }
     };
     reader.readAsDataURL(file);
+  };
+  const toggleDeliveryDay = (
+    day: DeliveryDay,
+    setter: React.Dispatch<React.SetStateAction<DeliveryDay[]>>
+  ) => {
+    setter((prev) => (prev.includes(day) ? prev.filter((value) => value !== day) : [...prev, day]));
   };
 
   const handleSave = () => {
@@ -628,6 +693,12 @@ function ProfileEditPanel({
         }
       });
 
+    const normalizeWeight = (value: number) => (Number.isFinite(value) && value > 0 ? value : undefined);
+    const deliveryLeadPayload =
+      deliveryLeadType === 'fixed_day'
+        ? { deliveryLeadType: 'fixed_day' as DeliveryLeadType, deliveryFixedDay }
+        : { deliveryLeadType: 'days' as DeliveryLeadType, deliveryLeadDays };
+
     const legalEntity =
       accountType !== 'individual' && legalName.trim() && siret.trim()
         ? {
@@ -635,12 +706,27 @@ function ProfileEditPanel({
             siret: siret.trim(),
             vatNumber: vatNumber.trim() || undefined,
             entityType: (legalEntityType as 'company' | 'association' | 'public_institution') ?? 'company',
+            ...deliveryLeadPayload,
+            chronofreshEnabled,
+            chronofreshMinWeight: chronofreshEnabled ? normalizeWeight(chronofreshMinWeight) : undefined,
+            chronofreshMaxWeight: chronofreshEnabled ? normalizeWeight(chronofreshMaxWeight) : undefined,
+            producerDeliveryEnabled,
+            producerDeliveryDays: producerDeliveryEnabled ? producerDeliveryDays : undefined,
+            producerDeliveryMinWeight: producerDeliveryEnabled ? normalizeWeight(producerDeliveryMinWeight) : undefined,
+            producerDeliveryMaxWeight: producerDeliveryEnabled ? normalizeWeight(producerDeliveryMaxWeight) : undefined,
+            producerPickupEnabled,
+            producerPickupDays: producerPickupEnabled ? producerPickupDays : undefined,
+            producerPickupStartTime: producerPickupEnabled ? producerPickupStartTime.trim() : undefined,
+            producerPickupEndTime: producerPickupEnabled ? producerPickupEndTime.trim() : undefined,
+            producerPickupMinWeight: producerPickupEnabled ? normalizeWeight(producerPickupMinWeight) : undefined,
+            producerPickupMaxWeight: producerPickupEnabled ? normalizeWeight(producerPickupMaxWeight) : undefined,
           }
         : undefined;
 
     onUpdateUser({
       name: name.trim() || user.name,
       address: address.trim(),
+      addressDetails: addressDetails.trim(),
       city: city.trim(),
       postcode: postcode.trim(),
       phone: phone.trim(),
@@ -891,6 +977,16 @@ function ProfileEditPanel({
                   </span>
                 ) : null}
               </div>
+              <div>
+                <label className="block text-sm text-[#6B7280]">Informations complementaires à l'adresse</label>
+                <input
+                  type="text"
+                  value={addressDetails}
+                  onChange={(e) => setAddressDetails(e.target.value)}
+                  placeholder="Lieu précis, bâtiment, étage, code d'entrée"
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                />
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-sm text-[#6B7280]">Code postal *</label>
@@ -1043,6 +1139,232 @@ function ProfileEditPanel({
             </div>
           </div>
         </section>
+
+        {role === 'producer' && (
+          <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Reglages producteur - Livraison</h3>
+              <span className="text-xs text-[#6B7280]">
+                Definissez les options proposees aux partageurs et les seuils de poids.
+              </span>
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+              <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4">
+                <label className="flex items-center gap-2 text-sm text-[#1F2937] font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={chronofreshEnabled}
+                    onChange={(e) => setChronofreshEnabled(e.target.checked)}
+                  />
+                  Expedition Chronofresh
+                </label>
+                <p className="text-xs text-[#6B7280]">Option geree par le site.</p>
+                <div className="space-y-2">
+                  <label className="block text-xs text-[#6B7280]">Delai de livraison apres cloture (Chronofresh)</label>
+                  <select
+                    value={deliveryLeadType === 'fixed_day' ? 'fixed_day' : `days-${deliveryLeadDays}`}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === 'fixed_day') {
+                        setDeliveryLeadType('fixed_day');
+                      } else {
+                        const days = Number(value.replace('days-', ''));
+                        setDeliveryLeadType('days');
+                        if (Number.isFinite(days)) {
+                          setDeliveryLeadDays(days);
+                        }
+                      }
+                    }}
+                    disabled={!chronofreshEnabled}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  >
+                    <option value="days-1">J+1</option>
+                    <option value="days-2">J+2</option>
+                    <option value="days-3">J+3</option>
+                    <option value="days-4">J+4</option>
+                    <option value="days-5">J+5</option>
+                    <option value="days-6">J+6</option>
+                    <option value="days-7">J+7</option>
+                    <option value="fixed_day">Jour fixe</option>
+                  </select>
+
+                  {deliveryLeadType === 'fixed_day' && (
+                    <select
+                      value={deliveryFixedDay}
+                      onChange={(e) => setDeliveryFixedDay(e.target.value as DeliveryDay)}
+                      disabled={!chronofreshEnabled}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    >
+                      {deliveryDayOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-[#6B7280]">Poids min (kg)</label>
+                    <input
+                      type="number"
+                      value={chronofreshMinWeight}
+                      onChange={(e) => setChronofreshMinWeight(Number(e.target.value))}
+                      min="0"
+                      disabled={!chronofreshEnabled}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#6B7280]">Poids max (kg)</label>
+                    <input
+                      type="number"
+                      value={chronofreshMaxWeight}
+                      onChange={(e) => setChronofreshMaxWeight(Number(e.target.value))}
+                      min="0"
+                      disabled={!chronofreshEnabled}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4">
+                <label className="flex items-center gap-2 text-sm text-[#1F2937] font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={producerDeliveryEnabled}
+                    onChange={(e) => setProducerDeliveryEnabled(e.target.checked)}
+                  />
+                  Livraison par le producteur
+                </label>
+                <p className="text-xs text-[#6B7280]">Selectionnez les jours disponibles.</p>
+                <div className="flex flex-wrap gap-2">
+                  {deliveryDayOptions.map((option) => {
+                    const isActive = producerDeliveryDays.includes(option.id);
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => toggleDeliveryDay(option.id, setProducerDeliveryDays)}
+                        disabled={!producerDeliveryEnabled}
+                        className={`px-3 py-1 rounded-full border text-xs ${
+                          isActive
+                            ? 'border-[#FF6B4A] bg-[#FFF1ED] text-[#FF6B4A]'
+                            : 'border-gray-200 text-[#6B7280]'
+                        } ${producerDeliveryEnabled ? '' : 'opacity-60 cursor-not-allowed'}`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-[#6B7280]">Poids min (kg)</label>
+                    <input
+                      type="number"
+                      value={producerDeliveryMinWeight}
+                      onChange={(e) => setProducerDeliveryMinWeight(Number(e.target.value))}
+                      min="0"
+                      disabled={!producerDeliveryEnabled}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#6B7280]">Poids max (kg)</label>
+                    <input
+                      type="number"
+                      value={producerDeliveryMaxWeight}
+                      onChange={(e) => setProducerDeliveryMaxWeight(Number(e.target.value))}
+                      min="0"
+                      disabled={!producerDeliveryEnabled}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4">
+                <label className="flex items-center gap-2 text-sm text-[#1F2937] font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={producerPickupEnabled}
+                    onChange={(e) => setProducerPickupEnabled(e.target.checked)}
+                  />
+                  Retrait par le partageur
+                </label>
+                <p className="text-xs text-[#6B7280]">Jours possibles pour venir chercher.</p>
+                <div className="flex flex-wrap gap-2">
+                  {deliveryDayOptions.map((option) => {
+                    const isActive = producerPickupDays.includes(option.id);
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => toggleDeliveryDay(option.id, setProducerPickupDays)}
+                        disabled={!producerPickupEnabled}
+                        className={`px-3 py-1 rounded-full border text-xs ${
+                          isActive
+                            ? 'border-[#FF6B4A] bg-[#FFF1ED] text-[#FF6B4A]'
+                            : 'border-gray-200 text-[#6B7280]'
+                        } ${producerPickupEnabled ? '' : 'opacity-60 cursor-not-allowed'}`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-[#6B7280]">Heure debut</label>
+                    <input
+                      type="time"
+                      value={producerPickupStartTime}
+                      onChange={(e) => setProducerPickupStartTime(e.target.value)}
+                      disabled={!producerPickupEnabled}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#6B7280]">Heure fin</label>
+                    <input
+                      type="time"
+                      value={producerPickupEndTime}
+                      onChange={(e) => setProducerPickupEndTime(e.target.value)}
+                      disabled={!producerPickupEnabled}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-[#6B7280]">Poids min (kg)</label>
+                    <input
+                      type="number"
+                      value={producerPickupMinWeight}
+                      onChange={(e) => setProducerPickupMinWeight(Number(e.target.value))}
+                      min="0"
+                      disabled={!producerPickupEnabled}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#6B7280]">Poids max (kg)</label>
+                    <input
+                      type="number"
+                      value={producerPickupMaxWeight}
+                      onChange={(e) => setProducerPickupMaxWeight(Number(e.target.value))}
+                      min="0"
+                      disabled={!producerPickupEnabled}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
 
         {accountType !== 'individual' && (
           <section className="rounded-2xl border border-[#D7E3FF] bg-[#F6F8FF] p-4 space-y-4 shadow-sm">

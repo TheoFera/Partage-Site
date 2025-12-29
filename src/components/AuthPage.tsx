@@ -12,6 +12,7 @@ type AuthLocationState = {
   mode?: AuthMode;
   signupPrefill?: {
     address?: string;
+    addressDetails?: string;
     city?: string;
     postcode?: string;
   };
@@ -36,6 +37,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const [city, setCity] = React.useState(locationState?.signupPrefill?.city ?? '');
   const [postcode, setPostcode] = React.useState(locationState?.signupPrefill?.postcode ?? '');
   const [address, setAddress] = React.useState(locationState?.signupPrefill?.address ?? '');
+  const [addressDetails, setAddressDetails] = React.useState(locationState?.signupPrefill?.addressDetails ?? '');
   const [accountType, setAccountType] = React.useState<'individual' | 'company' | 'association' | 'public_institution'>('individual');
   const [loading, setLoading] = React.useState(false);
 
@@ -125,6 +127,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               city,
               postcode,
               address,
+              address_details: addressDetails.trim(),
               account_type: accountType,
             },
           },
@@ -282,8 +285,8 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-2 md:col-span-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
                     <label className="text-sm text-[#374151] font-semibold">Adresse</label>
                     <input
                       type="text"
@@ -294,6 +297,19 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                       required
                     />
                   </div>
+                  <div className="space-y-2">
+                    <label className="text-sm text-[#374151] font-semibold">Informations complementaires a l'adresse</label>
+                    <input
+                      type="text"
+                      value={addressDetails}
+                      onChange={(e) => setAddressDetails(e.target.value)}
+                      placeholder="Batiment, etage, code entree"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <label className="text-sm text-[#374151] font-semibold">Code postal</label>
                     <input

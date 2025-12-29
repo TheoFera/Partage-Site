@@ -162,6 +162,7 @@ const AuthWall = ({
 type AuthRedirectExtras = {
   signupPrefill?: {
     address?: string;
+    addressDetails?: string;
     city?: string;
     postcode?: string;
   };
@@ -194,6 +195,7 @@ const mapSupabaseUserToProfile = (authUser: SupabaseAuthUser): User => {
     tagline: authUser.user_metadata?.tagline,
     website: authUser.user_metadata?.website,
     address: authUser.user_metadata?.address,
+    addressDetails: authUser.user_metadata?.address_details ?? authUser.user_metadata?.addressDetails,
     verified: Boolean(authUser.user_metadata?.verified),
     businessStatus: authUser.user_metadata?.businessStatus,
     producerId: authUser.user_metadata?.producerId,
@@ -275,6 +277,7 @@ type ProfileRow = {
   tagline: string | null;
   website: string | null;
   address: string | null;
+  address_details?: string | null;
   city: string | null;
   postcode: string | null;
   phone: string | null;
@@ -300,6 +303,22 @@ type LegalEntityRow = {
   siret: string;
   vat_number: string | null;
   entity_type: string;
+  delivery_lead_type?: string | null;
+  delivery_lead_days?: number | null;
+  delivery_fixed_day?: string | null;
+  chronofresh_enabled?: boolean | null;
+  chronofresh_min_weight?: number | null;
+  chronofresh_max_weight?: number | null;
+  producer_delivery_enabled?: boolean | null;
+  producer_delivery_days?: string[] | null;
+  producer_delivery_min_weight?: number | null;
+  producer_delivery_max_weight?: number | null;
+  producer_pickup_enabled?: boolean | null;
+  producer_pickup_days?: string[] | null;
+  producer_pickup_start_time?: string | null;
+  producer_pickup_end_time?: string | null;
+  producer_pickup_min_weight?: number | null;
+  producer_pickup_max_weight?: number | null;
 };
 
 type GeoPoint = {
@@ -312,6 +331,22 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   siret: row.siret,
   vatNumber: row.vat_number ?? undefined,
   entityType: (row.entity_type as LegalEntity['entityType']) ?? 'company',
+  deliveryLeadType: (row.delivery_lead_type as LegalEntity['deliveryLeadType']) ?? undefined,
+  deliveryLeadDays: row.delivery_lead_days ?? undefined,
+  deliveryFixedDay: (row.delivery_fixed_day as LegalEntity['deliveryFixedDay']) ?? undefined,
+  chronofreshEnabled: row.chronofresh_enabled ?? undefined,
+  chronofreshMinWeight: row.chronofresh_min_weight ?? undefined,
+  chronofreshMaxWeight: row.chronofresh_max_weight ?? undefined,
+  producerDeliveryEnabled: row.producer_delivery_enabled ?? undefined,
+  producerDeliveryDays: row.producer_delivery_days ?? undefined,
+  producerDeliveryMinWeight: row.producer_delivery_min_weight ?? undefined,
+  producerDeliveryMaxWeight: row.producer_delivery_max_weight ?? undefined,
+  producerPickupEnabled: row.producer_pickup_enabled ?? undefined,
+  producerPickupDays: row.producer_pickup_days ?? undefined,
+  producerPickupStartTime: row.producer_pickup_start_time ?? undefined,
+  producerPickupEndTime: row.producer_pickup_end_time ?? undefined,
+  producerPickupMinWeight: row.producer_pickup_min_weight ?? undefined,
+  producerPickupMaxWeight: row.producer_pickup_max_weight ?? undefined,
 });
 
 const mapProfileRowToUser = (
@@ -347,6 +382,11 @@ const mapProfileRowToUser = (
     tagline: row.tagline ?? undefined,
     website: row.website ?? undefined,
     address: row.address ?? undefined,
+    addressDetails:
+      row.address_details ??
+      authUser?.user_metadata?.address_details ??
+      authUser?.user_metadata?.addressDetails ??
+      undefined,
     city: row.city ?? undefined,
     postcode: row.postcode ?? undefined,
     phone: row.phone ?? undefined,
@@ -915,20 +955,22 @@ export default function App() {
       while (attempt < 3) {
         const { data, error } = await supabaseClient
           .from('profiles')
-          .insert({
-            id: authUser.id,
-            handle,
-            name: authUser.user_metadata?.full_name || authUser.email || handle,
-            role: authUser.user_metadata?.role || 'sharer',
-            profile_visibility: 'public',
-            address_visibility: 'private',
-            producer_id: authUser.user_metadata?.producerId,
-            profile_image: authUser.user_metadata?.avatar_url,
-            phone: authUser.user_metadata?.phone,
-            city: authUser.user_metadata?.city,
-            postcode: authUser.user_metadata?.postcode,
-            account_type: authUser.user_metadata?.account_type || 'individual',
-          })
+            .insert({
+              id: authUser.id,
+              handle,
+              name: authUser.user_metadata?.full_name || authUser.email || handle,
+              role: authUser.user_metadata?.role || 'sharer',
+              profile_visibility: 'public',
+              address_visibility: 'private',
+              producer_id: authUser.user_metadata?.producerId,
+              profile_image: authUser.user_metadata?.avatar_url,
+              phone: authUser.user_metadata?.phone,
+              address: authUser.user_metadata?.address,
+              address_details: authUser.user_metadata?.address_details ?? authUser.user_metadata?.addressDetails,
+              city: authUser.user_metadata?.city,
+              postcode: authUser.user_metadata?.postcode,
+              account_type: authUser.user_metadata?.account_type || 'individual',
+            })
           .select()
           .maybeSingle();
 
@@ -1015,6 +1057,15 @@ export default function App() {
 
   const viewer = user ?? mockUser;
   const isAuthenticated = Boolean(user);
+  const orderBuilderSource = orderBuilderProducts ?? deck;
+  const orderProducer = React.useMemo(() => {
+    const sourceProducts = orderBuilderProducts ?? deck;
+    const firstProducerId = sourceProducts[0]?.producerId;
+    if (!firstProducerId) return null;
+    if (profileForShare && profileForShare.producerId === firstProducerId) return profileForShare;
+    if (user && user.producerId === firstProducerId) return user;
+    return null;
+  }, [deck, orderBuilderProducts, profileForShare, user]);
 
   const normalizedSearch = normalizeText(searchQuery.trim());
   const applyProductFilters = filterScope !== 'producers';
@@ -1370,6 +1421,7 @@ export default function App() {
       toast.info('Connectez-vous ou creez un compte pour publier une commande.');
       const signupPrefill = {
         address: orderData?.pickupStreet || orderData?.pickupAddress || '',
+        addressDetails: orderData?.pickupInfo || orderData?.deliveryInfo || '',
         city: orderData?.pickupCity || '',
         postcode: orderData?.pickupPostcode || '',
       };
@@ -1383,6 +1435,29 @@ export default function App() {
       [orderData.pickupStreet, [orderData.pickupPostcode, orderData.pickupCity].filter(Boolean).join(' ') || undefined]
         .filter(Boolean)
         .join(', ');
+    const shareMode = orderData.shareMode ?? 'products';
+    const sharerQuantities =
+      shareMode === 'cash' ? {} : (orderData.shareQuantities as Record<string, number> | undefined) ?? {};
+    const hasSharerSelection = Object.values(sharerQuantities).some((qty) => qty > 0);
+    const getProductWeightKg = (product: Product) => {
+      if (product.weightKg) return product.weightKg;
+      const unit = product.unit?.toLowerCase() ?? '';
+      const match = unit.match(/([\d.,]+)\s*(kg|g)/);
+      if (match) {
+        const raw = parseFloat(match[1].replace(',', '.'));
+        if (Number.isFinite(raw)) {
+          return match[2] === 'kg' ? raw : raw / 1000;
+        }
+      }
+      if (product.measurement === 'kg') return 1;
+      return 0.25;
+    };
+    const sharerSelectionWeight = hasSharerSelection
+      ? (orderData.products ?? []).reduce((sum: number, product: Product) => {
+          const qty = sharerQuantities[product.id] ?? 0;
+          return sum + getProductWeightKg(product) * qty;
+        }, 0)
+      : 0;
 
     const newOrder: GroupOrder = {
       id: `order-${Date.now()}`,
@@ -1393,9 +1468,10 @@ export default function App() {
       producerId: firstProduct?.producerId ?? currentProducerId,
       producerName: firstProduct?.producerName ?? 'Producteur',
       sharerPercentage: orderData.sharerPercentage,
+      sharerQuantities: hasSharerSelection ? sharerQuantities : undefined,
       minWeight: orderData.minWeight,
       maxWeight: orderData.maxWeight,
-      orderedWeight: 0,
+      orderedWeight: sharerSelectionWeight,
       deadline: orderData.deadline ?? now,
       pickupStreet: orderData.pickupStreet,
       pickupCity: orderData.pickupCity,
@@ -1406,7 +1482,7 @@ export default function App() {
       status: 'open',
       visibility: orderData.visibility ?? 'public',
       totalValue: orderData.totals?.participantTotal ?? 0,
-      participants: 1,
+      participants: hasSharerSelection ? 1 : 0,
     };
 
     setGroupOrders((prev) => [newOrder, ...prev]);
@@ -1442,9 +1518,15 @@ export default function App() {
     }
 
     const normalizedRole = normalizeUserRole(userData.role ?? user.role);
+    const nextAddressDetails = (userData.addressDetails ?? user.addressDetails ?? '').trim();
 
     if (!supabaseClient) {
-      const updatedUser = { ...user, ...userData, role: normalizedRole };
+      const updatedUser = {
+        ...user,
+        ...userData,
+        role: normalizedRole,
+        addressDetails: nextAddressDetails || undefined,
+      };
       if (normalizedRole === 'producer') {
         updatedUser.producerId = updatedUser.producerId ?? 'current-user';
       }
@@ -1459,18 +1541,19 @@ export default function App() {
       return;
     }
 
-    const payload = {
-      name: userData.name ?? user.name,
-      handle: nextHandle,
-      role: normalizedRole,
-      account_type: userData.accountType ?? user.accountType ?? 'individual',
-      tagline: userData.tagline ?? user.tagline,
-      website: userData.website ?? user.website,
-      address: userData.address ?? user.address,
-      city: userData.city ?? user.city,
-      postcode: userData.postcode ?? user.postcode,
-      phone: userData.phone ?? user.phone,
-      phone_public: userData.phonePublic ?? user.phonePublic,
+      const payload = {
+        name: userData.name ?? user.name,
+        handle: nextHandle,
+        role: normalizedRole,
+        account_type: userData.accountType ?? user.accountType ?? 'individual',
+        tagline: userData.tagline ?? user.tagline,
+        website: userData.website ?? user.website,
+        address: userData.address ?? user.address,
+        address_details: nextAddressDetails || null,
+        city: userData.city ?? user.city,
+        postcode: userData.postcode ?? user.postcode,
+        phone: userData.phone ?? user.phone,
+        phone_public: userData.phonePublic ?? user.phonePublic,
       contact_email_public: userData.contactEmailPublic ?? user.contactEmailPublic,
       offers_on_site_pickup: userData.offersOnSitePickup ?? user.offersOnSitePickup ?? false,
       fresh_products_certified: userData.freshProductsCertified ?? user.freshProductsCertified ?? false,
@@ -1509,15 +1592,46 @@ export default function App() {
       return;
     }
 
+    if (userData.addressDetails !== undefined) {
+      const { error: authError } = await supabaseClient.auth.updateUser({
+        data: { address_details: nextAddressDetails || null },
+      });
+      if (authError) {
+        toast.error("Mise a jour des informations d'adresse impossible.");
+      }
+    }
+
     let legalEntityRow: LegalEntityRow | null = null;
-    if ((payload.account_type ?? user.accountType) !== 'individual' && userData.legalEntity?.legalName && userData.legalEntity.siret) {
-      const legalPayload = {
-        profile_id: user.id,
-        legal_name: userData.legalEntity.legalName,
-        siret: userData.legalEntity.siret,
-        vat_number: userData.legalEntity.vatNumber ?? null,
-        entity_type: userData.legalEntity.entityType ?? 'company',
-      };
+      if ((payload.account_type ?? user.accountType) !== 'individual' && userData.legalEntity?.legalName && userData.legalEntity.siret) {
+        const legalPayload = {
+          profile_id: user.id,
+          legal_name: userData.legalEntity.legalName,
+          siret: userData.legalEntity.siret,
+          vat_number: userData.legalEntity.vatNumber ?? null,
+          entity_type: userData.legalEntity.entityType ?? 'company',
+          delivery_lead_type: userData.legalEntity.deliveryLeadType ?? null,
+          delivery_lead_days: userData.legalEntity.deliveryLeadDays ?? null,
+          delivery_fixed_day: userData.legalEntity.deliveryFixedDay ?? null,
+          chronofresh_enabled: userData.legalEntity.chronofreshEnabled ?? null,
+          chronofresh_min_weight: userData.legalEntity.chronofreshMinWeight ?? null,
+          chronofresh_max_weight: userData.legalEntity.chronofreshMaxWeight ?? null,
+          producer_delivery_enabled: userData.legalEntity.producerDeliveryEnabled ?? null,
+          producer_delivery_days:
+            userData.legalEntity.producerDeliveryDays && userData.legalEntity.producerDeliveryDays.length > 0
+              ? userData.legalEntity.producerDeliveryDays
+              : null,
+          producer_delivery_min_weight: userData.legalEntity.producerDeliveryMinWeight ?? null,
+          producer_delivery_max_weight: userData.legalEntity.producerDeliveryMaxWeight ?? null,
+          producer_pickup_enabled: userData.legalEntity.producerPickupEnabled ?? null,
+          producer_pickup_days:
+            userData.legalEntity.producerPickupDays && userData.legalEntity.producerPickupDays.length > 0
+              ? userData.legalEntity.producerPickupDays
+              : null,
+          producer_pickup_start_time: userData.legalEntity.producerPickupStartTime ?? null,
+          producer_pickup_end_time: userData.legalEntity.producerPickupEndTime ?? null,
+          producer_pickup_min_weight: userData.legalEntity.producerPickupMinWeight ?? null,
+          producer_pickup_max_weight: userData.legalEntity.producerPickupMaxWeight ?? null,
+        };
       const { data: legalData, error: legalError } = await supabaseClient
         .from('legal_entities')
         .upsert(legalPayload, { onConflict: 'profile_id' })
@@ -1532,10 +1646,11 @@ export default function App() {
 
     if (data) {
       const mapped = mapProfileRowToUser(data as ProfileRow, null, legalEntityRow);
-      setUser(mapped);
-      prevRoleRef.current = mapped.role;
+      const updated = { ...mapped, addressDetails: nextAddressDetails || undefined };
+      setUser(updated);
+      prevRoleRef.current = updated.role;
       if (location.pathname.startsWith('/profil')) {
-        navigate(`/profil/${mapped.handle}`, { replace: true });
+        navigate(`/profil/${updated.handle}`, { replace: true });
       }
       toast.success('Profil mis a jour !');
     }
@@ -2109,8 +2224,10 @@ export default function App() {
             path="/commande/nouvelle"
             element={
               <CreateOrderForm
-                products={orderBuilderProducts ?? deck}
+                products={orderBuilderSource}
                 preselectedProductIds={orderBuilderSelection ?? undefined}
+                user={user}
+                producer={orderProducer}
                 onCreateOrder={handleCreateOrder}
                 onCancel={() => {
                   const target = orderBuilderSourceRef.current ?? tabRoutes.home;
