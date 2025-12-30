@@ -82,6 +82,16 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     navigate('/', { replace: false });
   };
 
+  const passwordPolicyLabel =
+    '8 caracteres minimum, avec une minuscule, une majuscule, un chiffre et un symbole.';
+  const isPasswordCompliant = (value: string) => {
+    if (value.length < 8) return false;
+    if (!/[a-z]/.test(value)) return false;
+    if (!/[A-Z]/.test(value)) return false;
+    if (!/\d/.test(value)) return false;
+    return /[^A-Za-z0-9]/.test(value);
+  };
+
   const sanitizeHandle = (value: string) => {
     return value
       .normalize('NFD')
@@ -111,6 +121,10 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
           toast.info('Vérifiez vos emails pour confirmer votre connexion.');
         }
       } else if (activeMode === 'signup') {
+        if (!isPasswordCompliant(password)) {
+          toast.error(`Le mot de passe doit respecter : ${passwordPolicyLabel}`);
+          return;
+        }
         const safeHandle = sanitizeHandle(handleValue || email);
         if (!safeHandle) {
           toast.error('Choisissez un tag valide (lettres et chiffres, sans espace).');
@@ -174,8 +188,8 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         setResetEmailSent(true);
         toast.success('Email envoye. Consultez votre boite pour reinitialiser votre mot de passe.');
       } else {
-        if (resetPassword.length < 6) {
-          toast.error('Le mot de passe doit contenir au moins 6 caracteres.');
+        if (!isPasswordCompliant(resetPassword)) {
+          toast.error(`Le mot de passe doit respecter : ${passwordPolicyLabel}`);
           return;
         }
         if (resetPassword !== resetPasswordConfirm) {
@@ -328,18 +342,19 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                     <label className="text-sm text-[#374151] font-semibold">Mot de passe</label>
                     <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
                       <Lock className="w-5 h-5 text-[#9CA3AF]" />
-                      <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Minimum 6 caracteres"
-                        className="flex-1 outline-none text-[#1F2937]"
-                        autoComplete="new-password"
-                        minLength={6}
-                        required
-                      />
-                    </div>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Minimum 8 caracteres"
+                      className="flex-1 outline-none text-[#1F2937]"
+                      autoComplete="new-password"
+                      minLength={8}
+                      required
+                    />
                   </div>
+                  <p className="text-xs text-[#6B7280]">{passwordPolicyLabel}</p>
+                </div>
                   <div className="space-y-2">
                     <label className="text-sm text-[#374151] font-semibold">Type de compte</label>
                     <select
@@ -434,10 +449,10 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                       type="password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Minimum 6 caracteres"
+                      placeholder="Minimum 8 caracteres"
                       className="flex-1 outline-none text-[#1F2937]"
                       autoComplete="current-password"
-                      minLength={6}
+                      minLength={8}
                       required
                     />
                   </div>
@@ -478,7 +493,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               </>
             ) : (
               <>
-                <p className="text-sm text-[#6B7280]">Choisissez un nouveau mot de passe (6 caracteres min).</p>
+                <p className="text-sm text-[#6B7280]">Choisissez un nouveau mot de passe.</p>
                 <div className="space-y-2">
                   <label className="text-sm text-[#374151] font-semibold">Nouveau mot de passe</label>
                   <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
@@ -487,13 +502,14 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                       type="password"
                       value={resetPassword}
                       onChange={(e) => setResetPassword(e.target.value)}
-                      placeholder="Minimum 6 caracteres"
+                      placeholder="Minimum 8 caracteres"
                       className="flex-1 outline-none text-[#1F2937]"
                       autoComplete="new-password"
-                      minLength={6}
+                      minLength={8}
                       required
                     />
                   </div>
+                  <p className="text-xs text-[#6B7280]">{passwordPolicyLabel}</p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm text-[#374151] font-semibold">Confirmer le mot de passe</label>
@@ -506,7 +522,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                       placeholder="Confirmez le mot de passe"
                       className="flex-1 outline-none text-[#1F2937]"
                       autoComplete="new-password"
-                      minLength={6}
+                      minLength={8}
                       required
                     />
                   </div>
