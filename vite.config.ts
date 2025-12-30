@@ -6,8 +6,8 @@
 
   const projectRoot = fs.realpathSync(__dirname);
 
-  export default defineConfig({
-    base: './',
+  export default defineConfig(({ command }) => ({
+    base: command === 'build' ? '/Partage/' : '/',
     root: projectRoot,
     plugins: [react()],
     resolve: {
@@ -62,4 +62,4 @@
       port: 3000,
       open: true,
     },
-  });
+  }));

@@ -857,7 +857,7 @@ function ProfileEditPanel({
                     onClick={() => setProfileVisibility('public')}
                   />
                   <VisibilityButton
-                    label="PrivǸ"
+                    label="Privé"
                     icon={Lock}
                     active={profileVisibility === 'private'}
                     onClick={() => setProfileVisibility('private')}

@@ -23,7 +23,7 @@ import { ShareOverlay } from './components/ShareOverlay';
 import { mockProducts, mockUser, mockGroupOrders } from './data/mockData';
 import { ProductDetailView } from './components/ProductDetailView';
 import { buildDefaultProductDetail, mockProductDetails } from './data/mockProductDetails';
-import { Product, DeckCard, User, GroupOrder, UserRole, LegalEntity, OrderPurchaseDraft } from './types';
+import { Product, DeckCard, User, GroupOrder, UserRole, DeliveryDay, LegalEntity, OrderPurchaseDraft } from './types';
 import { getSupabaseClient } from './lib/supabaseClient';
 import { toast, Toaster } from 'sonner';
 
@@ -345,6 +345,36 @@ type GeoPoint = {
   lng: number;
 };
 
+const DELIVERY_DAY_VALUES: DeliveryDay[] = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
+
+const DELIVERY_DAY_SET = new Set<string>(DELIVERY_DAY_VALUES);
+
+const normalizeDeliveryDayValue = (value?: string | null): DeliveryDay | undefined => {
+  if (!value) return undefined;
+  const normalized = value.toLowerCase().trim();
+  return DELIVERY_DAY_SET.has(normalized) ? (normalized as DeliveryDay) : undefined;
+};
+
+const normalizeDeliveryDays = (values?: string[] | null): DeliveryDay[] | undefined => {
+  if (!values?.length) return undefined;
+  const normalizedDays: DeliveryDay[] = [];
+  for (const value of values) {
+    const normalizedDay = normalizeDeliveryDayValue(value);
+    if (normalizedDay) {
+      normalizedDays.push(normalizedDay);
+    }
+  }
+  return normalizedDays.length ? normalizedDays : undefined;
+};
+
 const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   legalName: row.legal_name,
   siret: row.siret,
@@ -352,16 +382,16 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   entityType: (row.entity_type as LegalEntity['entityType']) ?? 'company',
   deliveryLeadType: (row.delivery_lead_type as LegalEntity['deliveryLeadType']) ?? undefined,
   deliveryLeadDays: row.delivery_lead_days ?? undefined,
-  deliveryFixedDay: (row.delivery_fixed_day as LegalEntity['deliveryFixedDay']) ?? undefined,
+  deliveryFixedDay: normalizeDeliveryDayValue(row.delivery_fixed_day),
   chronofreshEnabled: row.chronofresh_enabled ?? undefined,
   chronofreshMinWeight: row.chronofresh_min_weight ?? undefined,
   chronofreshMaxWeight: row.chronofresh_max_weight ?? undefined,
   producerDeliveryEnabled: row.producer_delivery_enabled ?? undefined,
-  producerDeliveryDays: row.producer_delivery_days ?? undefined,
+  producerDeliveryDays: normalizeDeliveryDays(row.producer_delivery_days),
   producerDeliveryMinWeight: row.producer_delivery_min_weight ?? undefined,
   producerDeliveryMaxWeight: row.producer_delivery_max_weight ?? undefined,
   producerPickupEnabled: row.producer_pickup_enabled ?? undefined,
-  producerPickupDays: row.producer_pickup_days ?? undefined,
+  producerPickupDays: normalizeDeliveryDays(row.producer_pickup_days),
   producerPickupStartTime: row.producer_pickup_start_time ?? undefined,
   producerPickupEndTime: row.producer_pickup_end_time ?? undefined,
   producerPickupMinWeight: row.producer_pickup_min_weight ?? undefined,
@@ -1791,7 +1821,7 @@ export default function App() {
     setUser(null);
     setDeck([]);
     prevRoleRef.current = null;
-    toast.success('Deconnexion reussie.');
+    toast.success('Déconnexion reussie.');
     navigate(tabRoutes.home);
   };
 
@@ -2024,7 +2054,7 @@ export default function App() {
       className="header-action-button header-action-button--ghost"
     >
       <LogOut className="header-action-icon" />
-      <span className="header-action-label">Deconnexion</span>
+      <span className="header-action-label">Déconnexion</span>
     </button>
   ) : null;
   const canShare = isOrderView ? Boolean(selectedOrder) : isProductView ? Boolean(selectedProduct) : isProfileView;
@@ -2274,7 +2304,7 @@ export default function App() {
             return;
           }
           const results = (data ?? [])
-            .map((row) => {
+            .map((row): ProfileSearchResult | null => {
               const role =
                 row.role === 'participant' || row.role === 'sharer' || row.role === 'producer'
                   ? (row.role as UserRole)
@@ -2285,12 +2315,12 @@ export default function App() {
                 handle: row.handle,
                 name: row.name || row.handle,
                 role,
-                city: row.city,
-                postcode: row.postcode,
+                city: row.city ?? undefined,
+                postcode: row.postcode ?? undefined,
                 producerId: row.producer_id ?? null,
               };
             })
-            .filter((row): row is ProfileSearchResult => Boolean(row));
+            .filter((row): row is ProfileSearchResult => row !== null);
           const filteredResults = filterProducerTags.length
             ? results.filter((row) => {
                 if (row.role !== 'producer') return false;

@@ -1,9 +1,9 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { SupabaseClient, User as SupabaseAuthUser } from '@supabase/supabase-js';
-import { Mail, Lock, UserPlus, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Mail, Lock, UserPlus, ArrowRight, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
-import { Logo } from './Logo';
+import './AuthPage.css';
 
 type AuthMode = 'login' | 'signup' | 'forgot' | 'reset';
 
@@ -31,8 +31,11 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const [mode, setMode] = React.useState<AuthMode>(locationState?.mode ?? 'login');
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
+  const [showPassword, setShowPassword] = React.useState(false);
   const [resetPassword, setResetPassword] = React.useState('');
+  const [showResetPassword, setShowResetPassword] = React.useState(false);
   const [resetPasswordConfirm, setResetPasswordConfirm] = React.useState('');
+  const [showResetPasswordConfirm, setShowResetPasswordConfirm] = React.useState(false);
   const [fullName, setFullName] = React.useState('');
   const [handleValue, setHandleValue] = React.useState('');
   const [phone, setPhone] = React.useState('');
@@ -47,11 +50,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const isRecoveryLink = React.useMemo(() => {
     const hashParams = new URLSearchParams((location.hash || '').replace(/^#/, ''));
     const searchParams = new URLSearchParams(location.search || '');
-    return (
-      hashParams.get('type') === 'recovery' ||
-      searchParams.get('type') === 'recovery' ||
-      searchParams.get('reset') === '1'
-    );
+    return hashParams.get('type') === 'recovery' || searchParams.get('type') === 'recovery' || searchParams.get('reset') === '1';
   }, [location.hash, location.search]);
   const activeMode: AuthMode = isRecoveryLink ? 'reset' : mode;
 
@@ -76,11 +75,8 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
       window.sessionStorage.removeItem('authRedirectTo');
     } catch {}
   }, []);
-  const supabaseIsReady = Boolean(supabaseClient);
 
-  const handleLogoClick = () => {
-    navigate('/', { replace: false });
-  };
+  const supabaseIsReady = Boolean(supabaseClient);
 
   const passwordPolicyLabel =
     '8 caracteres minimum, avec une minuscule, une majuscule, un chiffre et un symbole.';
@@ -104,7 +100,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!supabaseClient) {
-      toast.error('Supabase n est pas configuré. Utilisez le mode demo pour tester.');
+      toast.error('Supabase n est pas configure. Utilisez le mode demo pour tester.');
       return;
     }
     setLoading(true);
@@ -115,10 +111,10 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         if (data.user) {
           onAuthSuccess(data.user);
           clearStoredRedirect();
-          toast.success('Connexion réussie');
+          toast.success('Connexion reussie');
           navigate(redirectTo, { replace: true });
         } else {
-          toast.info('Vérifiez vos emails pour confirmer votre connexion.');
+          toast.info('Verifiez vos emails pour confirmer votre connexion.');
         }
       } else if (activeMode === 'signup') {
         if (!isPasswordCompliant(password)) {
@@ -141,7 +137,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
             return;
           }
           if (existing) {
-            toast.error('Ce tag est deja utilisé. Merci d en choisir un autre.');
+            toast.error('Ce tag est deja utilise. Merci d en choisir un autre.');
             return;
           }
         }
@@ -172,7 +168,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
           toast.success('Compte cree et connecte');
           navigate(redirectTo, { replace: true });
         } else {
-          toast.success('Compte crée. Consultez vos emails pour activer votre accès.');
+          toast.success('Compte cree. Consultez vos emails pour activer votre acces.');
         }
       } else if (activeMode === 'forgot') {
         const trimmedEmail = email.trim();
@@ -234,354 +230,387 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     activeMode === 'login'
       ? 'Connexion'
       : activeMode === 'signup'
-      ? 'Creer un compte'
+      ? 'Créer un compte'
       : activeMode === 'forgot'
-      ? 'Mot de passe oublie'
+      ? 'Mot de passe oublié'
       : 'Reinitialiser le mot de passe';
   const submitLabel =
     activeMode === 'login'
       ? 'Se connecter'
       : activeMode === 'signup'
-      ? 'Creer et continuer'
+      ? 'Créer un compte'
       : activeMode === 'forgot'
       ? 'Envoyer le lien'
       : 'Mettre a jour le mot de passe';
 
   return (
-    <div className="w-full flex justify-center px-2 sm:px-4 py-6 sm:py-10">
-      <div className="w-full max-w-5xl grid lg:grid-cols-2 bg-white border border-[#FFE0D1] rounded-3xl shadow-xl overflow-hidden">
-        <div className="p-8 md:p-10 bg-white text-[#1F2937] flex flex-col justify-between">
-          <div className="space-y-4">
-            <h1 className="text-3xl md:text-4xl font-bold leading-tight">
-              Rejoignez la communauté des partageurs
-            </h1>
-            <p className="text-base text-[#4B5563] leading-relaxed">
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-card__side auth-card__side--text">
+          <div>
+            <h1 className="auth-card__heading">Rejoignez la communauté des partageurs</h1>
+            <p className="auth-card__paragraph">
               Connectez-vous pour travailler en direct avec des producteurs ou procurez-vous des produits auprès des
               partageurs de votre quartier.
             </p>
           </div>
         </div>
-
-        <div className="p-8 md:p-10 space-y-6">
-          <div className="flex items-center justify-between">
+        <div className="auth-card__side auth-card__side--form">
+          <div className="auth-card__form-header">
             <div>
-              <p className="text-sm text-[#6B7280]">{activeMode === 'login' ? '' : ''}</p>
-              <h2 className="text-2xl font-semibold text-[#1F2937]">{title}</h2>
+              <p className="auth-card__eyebrow">{activeMode === 'login' ? '' : ''}</p>
+              <h2 className="auth-card__subtitle">{title}</h2>
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form className="auth-form" onSubmit={handleSubmit}>
             {activeMode === 'signup' ? (
               <>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Nom complet ou d'entreprise</label>
-                    <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
-                      <UserPlus className="w-5 h-5 text-[#9CA3AF]" />
+                <div className="auth-form__row">
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Nom complet ou d'entreprise</label>
+                    <div className="auth-form__input-wrapper">
+                      <UserPlus className="auth-form__icon" />
                       <input
                         type="text"
                         value={fullName}
                         onChange={(e) => setFullName(e.target.value)}
                         placeholder="Ex: Emma Martin"
-                        className="flex-1 outline-none text-[#1F2937]"
+                        className="auth-form__input"
                         autoComplete="name"
                       />
                     </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Tag public</label>
-                    <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
-                      <span className="text-[#9CA3AF] text-sm">@</span>
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Tag public</label>
+                    <div className="auth-form__input-wrapper">
+                      <span className="auth-form__icon">@</span>
                       <input
                         type="text"
                         value={handleValue}
                         onChange={(e) => setHandleValue(sanitizeHandle(e.target.value))}
                         placeholder="votrenom"
-                        className="flex-1 outline-none text-[#1F2937]"
+                        className="auth-form__input"
                         autoComplete="off"
                         required
                       />
                     </div>
-                    <p className="text-xs text-[#6B7280]">
-                       Sans espace, ni majuscule, ni caractère spécial, ce tag permettra de definir l'URL de votre profil : /profil/votretag. Deux comptes différents ne peuvent pas avoir le même tag.
+                    <p className="auth-form__helper">
+                      Sans espace ni majuscule, ce tag définira l'URL de votre profil (/profil/votretag). Il est
+                      unique.
                     </p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Email</label>
-                    <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
-                      <Mail className="w-5 h-5 text-[#9CA3AF]" />
+                <div className="auth-form__row">
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Email</label>
+                    <div className="auth-form__input-wrapper">
+                      <Mail className="auth-form__icon" />
                       <input
                         type="email"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         placeholder="vous@exemple.fr"
-                        className="flex-1 outline-none text-[#1F2937]"
+                        className="auth-form__input"
                         autoComplete="new-email"
                         required
                       />
                     </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Téléphone (obligatoire)</label>
-                    <input
-                      type="tel"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="06 00 00 00 00"
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#FF6B4A]"
-                      required
-                    />
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Téléphone (obligatoire)</label>
+                    <div className="auth-form__input-wrapper">
+                      <input
+                        type="tel"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="06 00 00 00 00"
+                        className="auth-form__input"
+                        required
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Mot de passe</label>
-                    <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
-                      <Lock className="w-5 h-5 text-[#9CA3AF]" />
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Minimum 8 caracteres"
-                      className="flex-1 outline-none text-[#1F2937]"
-                      autoComplete="new-password"
-                      minLength={8}
-                      required
-                    />
+                <div className="auth-form__row">
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Mot de passe</label>
+                    <div className="auth-form__input-wrapper">
+                      <Lock className="auth-form__icon" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Minimum 8 caracteres"
+                        className="auth-form__input"
+                        autoComplete="new-password"
+                        minLength={8}
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((prev) => !prev)}
+                        className="auth-password-toggle"
+                        aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                        aria-pressed={showPassword}
+                      >
+                        {showPassword ? <EyeOff className="auth-eye-icon" /> : <Eye className="auth-eye-icon" />}
+                      </button>
+                    </div>
+                    <p className="auth-form__helper">{passwordPolicyLabel}</p>
                   </div>
-                  <p className="text-xs text-[#6B7280]">{passwordPolicyLabel}</p>
-                </div>
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Type de compte</label>
-                    <select
-                      value={accountType}
-                      onChange={(e) =>
-                        setAccountType(
-                          (e.target.value as 'individual' | 'company' | 'association' | 'public_institution') ?? 'individual'
-                        )
-                      }
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#FF6B4A]"
-                      required
-                    >
-                      <option value="individual">Particulier</option>
-                      <option value="company">Entreprise</option>
-                      <option value="association">Association</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Adresse</label>
-                    <input
-                      type="text"
-                      value={address}
-                      onChange={(e) => setAddress(e.target.value)}
-                      placeholder="12 rue des Lilas"
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#FF6B4A]"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Informations complementaires a l'adresse</label>
-                    <input
-                      type="text"
-                      value={addressDetails}
-                      onChange={(e) => setAddressDetails(e.target.value)}
-                      placeholder="Batiment, etage, code entree"
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#FF6B4A]"
-                    />
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Type de compte</label>
+                    <div className="auth-form__input-wrapper">
+                      <select
+                        value={accountType}
+                        onChange={(e) =>
+                          setAccountType(
+                            (e.target.value as 'individual' | 'company' | 'association' | 'public_institution') ??
+                              'individual'
+                          )
+                        }
+                        className="auth-form__input"
+                        required
+                      >
+                        <option value="individual">Particulier</option>
+                        <option value="company">Entreprise</option>
+                        <option value="association">Association</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Code postal</label>
-                    <input
-                      type="text"
-                      value={postcode}
-                      onChange={(e) => setPostcode(e.target.value)}
-                      placeholder="75001"
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#FF6B4A]"
-                      required
-                    />
+                <div className="auth-form__row">
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Adresse</label>
+                    <div className="auth-form__input-wrapper">
+                      <input
+                        type="text"
+                        value={address}
+                        onChange={(e) => setAddress(e.target.value)}
+                        placeholder="12 rue des Lilas"
+                        className="auth-form__input"
+                        required
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm text-[#374151] font-semibold">Ville</label>
-                    <input
-                      type="text"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      placeholder="Paris"
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#FF6B4A]"
-                      required
-                    />
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Complément adresse</label>
+                    <div className="auth-form__input-wrapper">
+                      <input
+                        type="text"
+                        value={addressDetails}
+                        onChange={(e) => setAddressDetails(e.target.value)}
+                        placeholder="Batiment, etage, code entree"
+                        className="auth-form__input"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="auth-form__row">
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Code postal</label>
+                    <div className="auth-form__input-wrapper">
+                      <input
+                        type="text"
+                        value={postcode}
+                        onChange={(e) => setPostcode(e.target.value)}
+                        placeholder="75001"
+                        className="auth-form__input"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Ville</label>
+                    <div className="auth-form__input-wrapper">
+                      <input
+                        type="text"
+                        value={city}
+                        onChange={(e) => setCity(e.target.value)}
+                        placeholder="Paris"
+                        className="auth-form__input"
+                        required
+                      />
+                    </div>
                   </div>
                 </div>
               </>
             ) : activeMode === 'login' ? (
               <>
-                <div className="space-y-2">
-                  <label className="text-sm text-[#374151] font-semibold">Email</label>
-                  <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
-                    <Mail className="w-5 h-5 text-[#9CA3AF]" />
+                <div className="auth-form__col auth-form__col_single">
+                  <label className="auth-form__label">Email</label>
+                  <div className="auth-form__input-wrapper">
+                    <Mail className="auth-form__icon" />
                     <input
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="vous@exemple.fr"
-                      className="flex-1 outline-none text-[#1F2937]"
+                      className="auth-form__input"
                       autoComplete="email"
                       required
                     />
                   </div>
                 </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm text-[#374151] font-semibold">Mot de passe</label>
-                  <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
-                    <Lock className="w-5 h-5 text-[#9CA3AF]" />
+                <div className="auth-form__col auth-form__col_single">
+                  <label className="auth-form__label">Mot de passe</label>
+                  <div className="auth-form__input-wrapper">
+                    <Lock className="auth-form__icon" />
                     <input
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="Minimum 8 caracteres"
-                      className="flex-1 outline-none text-[#1F2937]"
+                      className="auth-form__input"
                       autoComplete="current-password"
                       minLength={8}
                       required
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      className="auth-password-toggle"
+                      aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? <EyeOff className="auth-eye-icon" /> : <Eye className="auth-eye-icon" />}
+                    </button>
                   </div>
                 </div>
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setMode('forgot')}
-                    className="text-xs text-[#FF6B4A] font-semibold hover:text-[#FF5A39]"
-                  >
-                    Mot de passe oublie ?
+                <div className="auth-form__action-row">
+                  <button type="button" onClick={() => setMode('forgot')} className="auth-link-button">
+                    Mot de passe oublié ?
                   </button>
                 </div>
               </>
             ) : activeMode === 'forgot' ? (
               <>
-                <p className="text-sm text-[#6B7280]">
-                  Saisissez votre email pour recevoir un lien de reinitialisation.
-                </p>
-                <div className="space-y-2">
-                  <label className="text-sm text-[#374151] font-semibold">Email</label>
-                  <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
-                    <Mail className="w-5 h-5 text-[#9CA3AF]" />
+                <div className="auth-form__col auth-form__col_single">
+                  <p className="auth-form__helper">
+                    Saisissez votre email pour recevoir un lien de reinitialisation.
+                  </p>
+                  <label className="auth-form__label">Email</label>
+                  <div className="auth-form__input-wrapper">
+                    <Mail className="auth-form__icon" />
                     <input
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="vous@exemple.fr"
-                      className="flex-1 outline-none text-[#1F2937]"
+                      className="auth-form__input"
                       autoComplete="email"
                       required
                     />
                   </div>
+                      {resetEmailSent ? (
+                        <p className="auth-form__helper auth-form__helper--valid">
+                          Lien envoye. Pensez a verifier vos spams.
+                        </p>
+                      ) : null}
                 </div>
-                {resetEmailSent ? (
-                  <p className="text-xs text-[#10B981]">Lien envoye. Pensez a verifier vos spams.</p>
-                ) : null}
               </>
             ) : (
               <>
-                <p className="text-sm text-[#6B7280]">Choisissez un nouveau mot de passe.</p>
-                <div className="space-y-2">
-                  <label className="text-sm text-[#374151] font-semibold">Nouveau mot de passe</label>
-                  <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
-                    <Lock className="w-5 h-5 text-[#9CA3AF]" />
-                    <input
-                      type="password"
-                      value={resetPassword}
-                      onChange={(e) => setResetPassword(e.target.value)}
-                      placeholder="Minimum 8 caracteres"
-                      className="flex-1 outline-none text-[#1F2937]"
-                      autoComplete="new-password"
-                      minLength={8}
-                      required
-                    />
-                  </div>
-                  <p className="text-xs text-[#6B7280]">{passwordPolicyLabel}</p>
+                <div className="auth-form__col auth-form__col_single">
+                  <p className="auth-form__helper">Choisissez un nouveau mot de passe.</p>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm text-[#374151] font-semibold">Confirmer le mot de passe</label>
-                  <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
-                    <ShieldCheck className="w-5 h-5 text-[#9CA3AF]" />
-                    <input
-                      type="password"
-                      value={resetPasswordConfirm}
-                      onChange={(e) => setResetPasswordConfirm(e.target.value)}
-                      placeholder="Confirmez le mot de passe"
-                      className="flex-1 outline-none text-[#1F2937]"
-                      autoComplete="new-password"
-                      minLength={8}
-                      required
-                    />
+                <div className="auth-form__row">
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Nouveau mot de passe</label>
+                    <div className="auth-form__input-wrapper">
+                      <Lock className="auth-form__icon" />
+                      <input
+                        type={showResetPassword ? 'text' : 'password'}
+                        value={resetPassword}
+                        onChange={(e) => setResetPassword(e.target.value)}
+                        placeholder="Minimum 8 caracteres"
+                        className="auth-form__input"
+                        autoComplete="new-password"
+                        minLength={8}
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowResetPassword((prev) => !prev)}
+                        className="auth-password-toggle"
+                        aria-label={showResetPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                        aria-pressed={showResetPassword}
+                      >
+                        {showResetPassword ? <EyeOff className="auth-eye-icon" /> : <Eye className="auth-eye-icon" />}
+                      </button>
+                    </div>
+                    <p className="auth-form__helper">{passwordPolicyLabel}</p>
+                  </div>
+                  <div className="auth-form__col">
+                    <label className="auth-form__label">Confirmer le mot de passe</label>
+                    <div className="auth-form__input-wrapper">
+                      <ShieldCheck className="auth-form__icon" />
+                      <input
+                        type={showResetPasswordConfirm ? 'text' : 'password'}
+                        value={resetPasswordConfirm}
+                        onChange={(e) => setResetPasswordConfirm(e.target.value)}
+                        placeholder="Confirmez le mot de passe"
+                        className="auth-form__input"
+                        autoComplete="new-password"
+                        minLength={8}
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowResetPasswordConfirm((prev) => !prev)}
+                        className="auth-password-toggle"
+                        aria-label={showResetPasswordConfirm ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                        aria-pressed={showResetPasswordConfirm}
+                      >
+                        {showResetPasswordConfirm ? <EyeOff className="auth-eye-icon" /> : <Eye className="auth-eye-icon" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </>
             )}
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#FF6B4A] text-white font-semibold shadow-md hover:bg-[#FF5A39] transition-colors disabled:opacity-60"
-            >
+            <button type="submit" className="auth-btn auth-btn--primary" disabled={loading}>
               {loading ? 'Traitement...' : submitLabel}
-              <ArrowRight className="w-5 h-5" />
+              <ArrowRight className="auth-eye-icon" />
             </button>
           </form>
 
           {!isRecoveryLink ? (
-            <div className="flex items-center gap-2">
+            <div className="auth-form__action-row">
               {activeMode === 'login' || activeMode === 'signup' ? (
                 <>
-                  <span className="text-sm text-[#6B7280]">
+                  <span className="auth-form__helper">
                     {activeMode === 'login' ? 'Pas encore de compte ?' : 'Deja inscrit ?'}
                   </span>
                   <button
                     type="button"
                     onClick={() => setMode(activeMode === 'login' ? 'signup' : 'login')}
-                    className="text-sm text-[#FF6B4A] font-semibold hover:text-[#FF5A39]"
+                    className="auth-link-button"
                   >
-                    {activeMode === 'login' ? 'Creer un compte' : 'Se connecter'}
+                    {activeMode === 'login' ? 'Créer un compte' : 'Se connecter'}
                   </button>
                 </>
               ) : activeMode === 'forgot' ? (
                 <>
-                  <span className="text-sm text-[#6B7280]">Vous avez deja un compte ?</span>
-                  <button
-                    type="button"
-                    onClick={() => setMode('login')}
-                    className="text-sm text-[#FF6B4A] font-semibold hover:text-[#FF5A39]"
-                  >
-                    Retour a la connexion
+                  <span className="auth-form__helper">Vous avez deja un compte ?</span>
+                  <button type="button" onClick={() => setMode('login')} className="auth-link-button">
+                    Retour à la connexion
                   </button>
                 </>
               ) : null}
             </div>
           ) : null}
 
-          <div className="pt-4 border-t border-dashed border-gray-200 space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-[#6B7280]"></p>
-              <button
-                onClick={handleDemo}
-                className="text-sm font-semibold text-[#1F2937] px-3 py-2 rounded-lg border border-gray-200 hover:border-[#FF6B4A] hover:text-[#FF6B4A] transition-colors"
-              >
-                Mode demo
-              </button>
-            </div>
-            <p className="text-xs text-[#9CA3AF]">
-            </p>
+          <div className="auth-card__footer">
+            <p></p>
+            <button onClick={handleDemo} className="auth-card__demo-button" type="button">
+              Mode démo
+            </button>
           </div>
         </div>
       </div>
