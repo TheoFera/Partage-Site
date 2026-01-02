@@ -40,6 +40,9 @@ export interface LegalEntity {
   siret: string;
   vatNumber?: string;
   entityType: 'company' | 'association' | 'public_institution';
+  producerCategory?: string;
+  iban?: string;
+  accountHolderName?: string;
   deliveryLeadType?: DeliveryLeadType;
   deliveryLeadDays?: number;
   deliveryFixedDay?: DeliveryDay;
@@ -60,6 +63,8 @@ export interface LegalEntity {
 
 export interface Product {
   id: string;
+  productCode?: string;
+  slug?: string;
   name: string;
   description: string;
   price: number;
@@ -168,6 +173,8 @@ export interface ProductionConditions {
 export interface Ingredient {
   nom: string;
   produitLieId?: string;
+  isAllergen?: boolean;
+  allergenType?: string;
 }
 
 export interface NutritionFacts {
@@ -199,7 +206,17 @@ export interface TraceDocument {
 }
 
 export interface TimelineStep {
+  journeyStepId?: string;
+  localId?: string;
   etape: string;
+  description?: string;
+  address?: string;
+  addressDetails?: string;
+  country?: string;
+  postcode?: string;
+  city?: string;
+  lat?: number;
+  lng?: number;
   lieu?: string;
   date?: string;
   dateType?: 'date' | 'period';
@@ -216,6 +233,7 @@ export interface Tracabilite {
   datesImportantes?: { label: string; date: string }[];
   preuves?: TraceDocument[];
   timeline?: TimelineStep[];
+  lotTimeline?: TimelineStep[];
 }
 
 export interface ProductionLot {
@@ -235,6 +253,7 @@ export interface ProductionLot {
 }
 
 export interface RepartitionPoste {
+  partiePrenante?: string;
   nom: string;
   valeur: number;
   type: 'eur' | 'percent';
@@ -304,6 +323,12 @@ export interface ResumePictos {
   };
 }
 
+export interface ProducerLabelDetail {
+  label: string;
+  description?: string;
+  obtentionYear?: number;
+}
+
 export interface ProductDetail {
   productId: string;
   name: string;
@@ -330,6 +355,9 @@ export interface ProductDetail {
   priceReference?: PriceReference;
   officialBadges?: string[];
   platformBadges?: string[];
+  officialBadgeDetails?: ProducerLabelDetail[];
+  platformBadgeDetails?: ProducerLabelDetail[];
+  producerLabels?: ProducerLabelDetail[];
   productionConditions?: ProductionConditions;
   compositionEtiquette?: CompositionEtiquette;
   tracabilite?: Tracabilite;
@@ -339,4 +367,198 @@ export interface ProductDetail {
   questions?: Questions;
   produitsLies?: ProduitsLies;
   resumePictos?: ResumePictos;
+}
+
+export interface CreateProductPayload {
+  product: Omit<Product, 'id'>;
+  detail: ProductDetail;
+  imageFile?: File | null;
+  journeyImageFiles?: Array<{ localId: string; stepLabel: string; file: File; previewUrl: string }>;
+  lotTraceSteps?: Array<{
+    lotId: string;
+    stepKey: string;
+    journeyStepId?: string;
+    stepLabel: string;
+    periodStart?: string;
+    periodEnd?: string;
+    dateType?: 'date' | 'period';
+  }>;
+}
+
+export interface ProductListingRow {
+  product_id: string;
+  product_code: string;
+  slug: string;
+  name: string;
+  category: string;
+  sale_unit: 'unit' | 'kg';
+  packaging: string;
+  unit_weight_kg: number | null;
+  description: string | null;
+  default_price_cents: number | null;
+  producer_profile_id: string | null;
+  producer_name: string | null;
+  producer_location: string | null;
+  primary_image_path: string | null;
+  active_lot_code: string | null;
+  active_lot_price_cents: number | null;
+  active_lot_stock_units: number | null;
+  active_lot_stock_kg: number | null;
+  display_price_cents: number | null;
+}
+
+export interface DbProduct {
+  id: string;
+  product_code: string;
+  slug: string;
+  name: string;
+  sale_unit: 'unit' | 'kg';
+  packaging: string;
+  unit_weight_kg: number | null;
+  description: string | null;
+  category: string;
+  conservation_method: string | null;
+  conservation_detail: string | null;
+  conservation_after_opening: string | null;
+  default_price_cents: number | null;
+  producer_profile_id: string | null;
+  producer_name: string | null;
+  producer_location: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbProductImage {
+  id: string;
+  product_id: string;
+  path: string;
+  alt: string | null;
+  sort_order: number;
+  is_primary: boolean;
+  created_at: string;
+}
+
+export interface DbLot {
+  id: string;
+  lot_code: string;
+  product_id: string;
+  status: 'draft' | 'active' | 'sold_out' | 'archived';
+  price_cents: number;
+  stock_units: number | null;
+  stock_kg: number | null;
+  lot_comment: string | null;
+  produced_at: string | null;
+  dlc: string | null;
+  ddm: string | null;
+  notes: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbProductJourneyStep {
+  id: string;
+  product_id: string;
+  step_label: string;
+  description: string | null;
+  location: string | null;
+  location_address?: string | null;
+  location_details?: string | null;
+  location_country?: string | null;
+  location_postcode?: string | null;
+  location_city?: string | null;
+  location_lat?: number | null;
+  location_lng?: number | null;
+  sort_order: number;
+  evidence_path?: string | null;
+  evidence_label?: string | null;
+  created_at: string;
+}
+
+export interface DbProductLabel {
+  id: string;
+  product_id: string;
+  label: string;
+  description: string | null;
+  label_type: string | null;
+  obtained_year?: number | null;
+  created_at: string;
+}
+
+export interface DbProducerLabel {
+  id: string;
+  profile_id: string;
+  label: string;
+  description: string | null;
+  label_type: string | null;
+  obtained_year?: number | null;
+  created_at: string;
+}
+
+
+export interface DbProductReview {
+  id: string;
+  product_id: string;
+  author_name: string | null;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+}
+
+export interface DbProductQuestion {
+  id: string;
+  product_id: string;
+  question: string;
+  answer: string | null;
+  asked_at: string;
+  answered_at: string | null;
+}
+
+export interface DbProductIngredient {
+  id: string;
+  product_id: string;
+  name: string;
+  description: string | null;
+  is_allergen: boolean;
+  allergen_type: string | null;
+  linked_product_url: string | null;
+  created_at: string;
+}
+
+export interface DbLotTraceStep {
+  id: string;
+  lot_id: string;
+  product_step_id: string | null;
+  step_label: string | null;
+  occurred_at: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  location: string | null;
+  notes: string | null;
+  evidence_label: string | null;
+  evidence_url: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface DbLotInput {
+  id: string;
+  lot_id: string;
+  input_name: string;
+  reason: string | null;
+  details: string | null;
+  created_at: string;
+}
+
+export interface DbLotPriceBreakdown {
+  id: string;
+  lot_id: string;
+  stakeholder: string | null;
+  label: string;
+  value_type: 'cents' | 'percent';
+  value_cents: number | null;
+  value_percent: number | null;
+  sort_order: number;
+  created_at: string;
 }

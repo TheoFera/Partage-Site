@@ -21,6 +21,8 @@ export const mockUser: User = {
 export const mockProducts: Product[] = [
   {
     id: '1',
+    productCode: 'A1b2C3d4E5f6G7h8',
+    slug: 'tomates-anciennes',
     name: 'Tomates anciennes',
     description: 'Tomates anciennes bio cultivées localement',
     price: 4.8,
@@ -37,6 +39,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '2',
+    productCode: 'B2c3D4e5F6g7H8i9',
+    slug: 'fromage-de-chevre-frais',
     name: 'Fromage de chèvre frais',
     description: 'Fromage artisanal au lait cru',
     price: 3.9,
@@ -53,6 +57,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '3',
+    productCode: 'C3d4E5f6G7h8I9j0',
+    slug: 'pommes-gala',
     name: 'Pommes Gala',
     description: 'Pommes croquantes et sucrées',
     price: 5.2,
@@ -69,6 +75,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '4',
+    productCode: 'D4e5F6g7H8i9J0k1',
+    slug: 'panier-de-legumes',
     name: 'Panier de légumes',
     description: 'Assortiment de légumes de saison',
     price: 12.5,
@@ -85,6 +93,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '5',
+    productCode: 'E5f6G7h8I9j0K1l2',
+    slug: 'miel-de-fleurs',
     name: 'Miel de fleurs',
     description: 'Miel artisanal récolté localement',
     price: 8.9,
@@ -101,6 +111,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '6',
+    productCode: 'F6g7H8i9J0k1L2m3',
+    slug: 'pain-au-levain',
     name: 'Pain au levain',
     description: 'Pain bio cuit au feu de bois',
     price: 4.2,
@@ -117,6 +129,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '7',
+    productCode: 'G7h8I9j0K1l2M3n4',
+    slug: 'tomates-coeur-de-boeuf',
     name: 'Tomates coeur de boeuf',
     description: 'Tomates charnues et savoureuses, cueillies mûres',
     price: 5.1,
@@ -133,6 +147,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '8',
+    productCode: 'H8i9J0k1L2m3N4o5',
+    slug: 'tomme-affinee',
     name: 'Tomme affinée',
     description: 'Fromage affine 6 mois, lait cru de chevre',
     price: 6.4,
@@ -149,6 +165,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '9',
+    productCode: 'I9j0K1l2M3n4O5p6',
+    slug: 'pommes-pink-lady',
     name: 'Pommes Pink Lady',
     description: 'Pommes croquantes, parfaites en dessert',
     price: 4.9,
@@ -165,6 +183,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '10',
+    productCode: 'J0k1L2m3N4o5P6q7',
+    slug: 'panier-gourmand',
     name: 'Panier gourmand',
     description: 'Melange de fruits et legumes de saison',
     price: 14.9,
@@ -181,6 +201,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '11',
+    productCode: 'K1l2M3n4O5p6Q7r8',
+    slug: 'miel-cremeux',
     name: 'Miel crémeux',
     description: 'Miel doux, texture onctueuse',
     price: 7.5,
@@ -197,6 +219,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '12',
+    productCode: 'L2m3N4o5P6q7R8s9',
+    slug: 'baguette-de-campagne',
     name: 'Baguette de campagne',
     description: 'Farine de ble ancien, levain naturel',
     price: 3.1,
@@ -213,6 +237,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '13',
+    productCode: 'M3n4O5p6Q7r8S9t0',
+    slug: 'courge-butternut',
     name: 'Courge butternut',
     description: 'Courge douce parfaite pour les veloutes',
     price: 3.2,
@@ -229,6 +255,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '14',
+    productCode: 'N4o5P6q7R8s9T0u1',
+    slug: 'yaourt-fermier',
     name: 'Yaourt fermier',
     description: 'Yaourt nature au lait de chevre',
     price: 2.2,
@@ -245,6 +273,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '15',
+    productCode: 'O5p6Q7r8S9t0U1v2',
+    slug: 'jus-de-pomme-artisanal',
     name: 'Jus de pomme artisanal',
     description: 'Pur jus presse, sans sucres ajoutes',
     price: 3.6,
@@ -261,6 +291,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '16',
+    productCode: 'P6q7R8s9T0u1V2w3',
+    slug: 'oeufs-plein-air',
     name: 'Oeufs plein air',
     description: 'Oeufs de poules elevees en plein air',
     price: 3.3,
@@ -277,6 +309,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '17',
+    productCode: 'Q7r8S9t0U1v2W3x4',
+    slug: 'confiture-framboise',
     name: 'Confiture framboise',
     description: 'Confiture maison riche en fruits',
     price: 4.7,
@@ -293,6 +327,8 @@ export const mockProducts: Product[] = [
   },
   {
     id: '18',
+    productCode: 'R8s9T0u1V2w3X4y5',
+    slug: 'granola-maison',
     name: 'Granola maison',
     description: 'Flocons bio, miel, fruits secs',
     price: 5.8,

@@ -2082,7 +2082,7 @@ html {
   width: min(240px, 70vw);
   height: min(240px, 70vw);
   margin: 0 auto;
-  border-radius: 20px;
+  border-radius: 9999px;
   overflow: hidden;
   background: #f3f4f6;
   position: relative;
@@ -2093,7 +2093,7 @@ html {
   content: '';
   position: absolute;
   inset: 0;
-  border-radius: 20px;
+  border-radius: 9999px;
   border: 2px solid rgba(255, 107, 74, 0.55);
   pointer-events: none;
 }
@@ -2105,6 +2105,8 @@ html {
   transform-origin: center;
   user-select: none;
   pointer-events: none;
+  max-width: none;
+  max-height: none;
 }
 
 .avatar-cropper__controls {
@@ -2162,6 +2164,185 @@ html {
 .avatar-uploader__ghost:hover {
   border-color: #ff6b4a;
   color: #ff6b4a;
+}
+
+/* Product image uploader */
+.product-image-uploader {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.product-image-uploader__frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 145 / 105;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid #F1E8D7;
+  background: #FFF6EB;
+}
+
+.product-image-uploader__frame--empty {
+  border-style: dashed;
+}
+
+.product-image-uploader__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.product-image-uploader__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17, 24, 39, 0.45);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.product-image-uploader__frame:hover .product-image-uploader__overlay,
+.product-image-uploader__frame:focus-within .product-image-uploader__overlay,
+.product-image-uploader__frame--empty .product-image-uploader__overlay {
+  opacity: 1;
+}
+
+.product-image-uploader__frame--empty .product-image-uploader__overlay {
+  background: transparent;
+}
+
+.product-image-uploader__overlay[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.product-image-uploader__overlay-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px dashed #D1D5DB;
+  background: #F9FAFB;
+  color: #374151;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.product-image-uploader__overlay-button input[type='file'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.product-image-uploader__crop {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.product-image-cropper__frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 145 / 105;
+  border-radius: 20px;
+  overflow: hidden;
+  background: #f3f4f6;
+  border: 1px solid #F1E8D7;
+  touch-action: none;
+}
+
+.product-image-cropper__frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+  border: 2px solid rgba(255, 107, 74, 0.55);
+  pointer-events: none;
+}
+
+.product-image-cropper__image {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center;
+  user-select: none;
+  pointer-events: none;
+  max-width: none;
+  max-height: none;
+}
+
+.product-image-cropper__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.product-image-cropper__controls input[type='range'] {
+  flex: 1;
+}
+
+.product-image-cropper__label {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.product-image-cropper__value {
+  font-size: 0.75rem;
+  color: #9ca3af;
+}
+
+.product-image-uploader__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.product-image-uploader__primary,
+.product-image-uploader__ghost {
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.product-image-uploader__primary {
+  background: #ff6b4a;
+  color: #ffffff;
+}
+
+.product-image-uploader__primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.product-image-uploader__ghost {
+  background: #ffffff;
+  border-color: #e5e7eb;
+  color: #1f2937;
+}
+
+.product-image-uploader__ghost:hover {
+  border-color: #ff6b4a;
+  color: #ff6b4a;
+}
+
+.product-image-uploader__error {
+  font-size: 0.75rem;
+  color: #dc2626;
+}
+
+@media (hover: none) {
+  .product-image-uploader__overlay {
+    opacity: 1;
+  }
 }
 
 @media (min-width: 640px) {

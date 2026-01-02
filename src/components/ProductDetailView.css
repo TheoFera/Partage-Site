@@ -650,13 +650,12 @@
 }
 
 .pd-map {
-  height: 12rem;
+  height: 16rem;
   border-radius: 16px;
   border: 1px dashed #F1E8D7;
   background: linear-gradient(135deg, #FFF6EB 0%, #F4F7FF 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: hidden;
+  position: relative;
 }
 
 .pd-map__label {
@@ -665,6 +664,26 @@
   gap: 0.4rem;
   font-size: 0.875rem;
   color: #6B7280;
+}
+
+.pd-map-marker {
+  background: transparent;
+  border: none;
+}
+
+.pd-map-marker span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  background: #FF6B4A;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.75rem;
+  box-shadow: 0 6px 14px rgba(255, 107, 74, 0.35);
+  border: 2px solid #ffffff;
 }
 
 .pd-chart {
@@ -843,6 +862,21 @@
   }
 }
 
+.pd-timeline__media-frame {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #F1E8D7;
+  background: #FFF6EB;
+}
+
+.pd-timeline__media-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .pd-alert {
   display: flex;
   align-items: center;
@@ -963,4 +997,3 @@
 .pd-related-row > * {
   scroll-snap-align: start;
 }
-

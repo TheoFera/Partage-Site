@@ -793,7 +793,7 @@ export function ProductResultCard({
           )}
           <button
             type="button"
-            onClick={() => onOpen(product.id)}
+            onClick={() => onOpen(product.productCode ?? product.id)}
             className="text-left text-base font-semibold text-[#1F2937] hover:text-[#FF6B4A] transition-colors"
           >
             {product.name}

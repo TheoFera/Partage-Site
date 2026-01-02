@@ -1,8 +1,9 @@
 import React from 'react';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import {
-  Bell,
   CheckCircle2,
-  ExternalLink,
   GripVertical,
   Heart,
   Info,
@@ -19,13 +20,22 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { ProductImageUploader } from './ProductImageUploader';
 import { ProductResultCard } from './ProductsLanding';
 import './ProductDetailView.css';
+import { generateBase62Code } from '../lib/codeGenerator';
+import { PRODUCT_CATEGORIES } from '../constants/productCategories';
+import { DEMO_MODE } from '../data/productsProvider';
 import {
+  CreateProductPayload,
+  DbLotTraceStep,
   GroupOrder,
+  Ingredient,
   LinkedProduct,
+  NutritionFacts,
   Product,
   ProductDetail,
+  ProducerLabelDetail,
   ProductionLot,
   RepartitionPoste,
   TimelineStep,
@@ -38,6 +48,7 @@ interface ProductDetailViewProps {
   isOwner: boolean;
   isSaved?: boolean;
   catalog?: Product[];
+  supabaseClient?: SupabaseClient | null;
   onHeaderActionsChange?: (actions: React.ReactNode) => void;
   onOpenProducer?: (product: Product) => void;
   onOpenRelatedProduct?: (productId: string) => void;
@@ -45,9 +56,20 @@ interface ProductDetailViewProps {
   onCreateOrder: () => void;
   onParticipate: () => void;
   onToggleSave?: (next: boolean) => void;
+  initialLotId?: string;
+  mode?: 'view' | 'create';
+  onCreateProduct?: (payload: CreateProductPayload) => void;
+  categoryOptions?: string[];
+  producerProfileLabels?: ProducerLabelDetail[];
 }
 
-type DetailTabKey = 'circuit' | 'quality' | 'repartition' | 'consumption' | 'transparency';
+type DetailTabKey =
+  | 'circuit'
+  | 'quality'
+  | 'repartition'
+  | 'consumption'
+  | 'transparency'
+  | 'lot';
 
 const TAB_OPTIONS: Array<{ id: DetailTabKey; label: string; icon: React.ElementType }> = [
   { id: 'circuit', label: 'Circuit-court', icon: Leaf },
@@ -69,20 +91,29 @@ const LABEL_DESCRIPTIONS: Record<string, string> = {
   'frais controle': 'Respect du froid et controles reguliers.',
 };
 
-const DEFAULT_STEP_EXPLANATIONS: Record<string, string> = {
-  production: 'Fenetre de disponibilite, pratiques de production et savoir-faire.',
-  transformation: 'Methode de transformation et gestes cles.',
-  abattage: "Etape d'abattage encadree et tracabilisee.",
-  conditionnement: 'Conditionnement, etiquetage et preparation des lots.',
-  retrait: 'Retrait/livraison, zones de distribution.',
-  livraison: 'Retrait/livraison, zones de distribution.',
-};
+const mapMarkerIcon = L.icon({
+  iconUrl: new URL('leaflet/dist/images/marker-icon.png', import.meta.url).toString(),
+  iconRetinaUrl: new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).toString(),
+  shadowUrl: new URL('leaflet/dist/images/marker-shadow.png', import.meta.url).toString(),
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+});
+L.Marker.prototype.options.icon = mapMarkerIcon;
 
 const normalizeKey = (value: string) => value.toLowerCase().trim();
 
+const normalizeText = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+const slugify = (value: string) =>
+  normalizeText(value).replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+
 const getLabelDescription = (label: string) => {
   const key = normalizeKey(label);
-  return LABEL_DESCRIPTIONS[key] ?? `Cahier des charges a consulter pour "${label}".`;
+  return LABEL_DESCRIPTIONS[key] ?? `Cahier des charges à consulter pour "${label}".`;
 };
 
 const getPrimaryPickupLabel = (orders: GroupOrder[], fallback?: string) => {
@@ -104,34 +135,79 @@ const resolveLocationForStep = (label: string, detail: ProductDetail, pickupLabe
   return detail.producer.city || detail.originCountry;
 };
 
-const buildFallbackTimeline = (detail: ProductDetail, pickupLabel?: string): TimelineStep[] => {
-  if (detail.tracabilite?.datesImportantes?.length) {
-    return detail.tracabilite.datesImportantes.map((item) => ({
-      etape: item.label,
-      date: item.date,
-      lieu: resolveLocationForStep(item.label, detail, pickupLabel),
-    }));
-  }
+const buildFallbackTimeline = (_detail: ProductDetail, _pickupLabel?: string): TimelineStep[] => [];
 
-  const steps: TimelineStep[] = [];
-  const productionLocation = detail.tracabilite?.lieuProduction || detail.originCountry;
-  if (productionLocation) steps.push({ etape: 'Production', lieu: productionLocation });
-  const transformationLocation = detail.tracabilite?.lieuTransformation || detail.producer.city;
-  if (transformationLocation) steps.push({ etape: 'Transformation', lieu: transformationLocation });
-  if (detail.tracabilite?.lieuAbattage) {
-    steps.push({ etape: 'Abattage', lieu: detail.tracabilite.lieuAbattage });
-  }
-  if (transformationLocation) steps.push({ etape: 'Conditionnement', lieu: transformationLocation });
-  if (pickupLabel) steps.push({ etape: 'Retrait', lieu: pickupLabel });
-  return steps;
+type LotStepDates = {
+  periodStart?: string;
+  periodEnd?: string;
+  dateType?: 'date' | 'period';
 };
 
-const getStepExplanation = (step: TimelineStep) => {
-  if (step.preuve?.label) return step.preuve.label;
-  const normalized = step.etape.toLowerCase();
-  const match = Object.keys(DEFAULT_STEP_EXPLANATIONS).find((key) => normalized.includes(key));
-  return (match && DEFAULT_STEP_EXPLANATIONS[match]) || 'Informations a renseigner sur cette etape.';
+const resolveStepKey = (step: TimelineStep) => step.localId ?? step.journeyStepId ?? step.etape;
+
+const buildLotDatesMap = (steps: TimelineStep[], journeySteps: TimelineStep[] = []) => {
+  const map: Record<string, LotStepDates> = {};
+  const journeyById = new Map(
+    journeySteps
+      .filter((step) => step.journeyStepId)
+      .map((step) => [step.journeyStepId as string, step] as const)
+  );
+  const journeyByLabel = new Map(
+    journeySteps
+      .filter((step) => step.etape)
+      .map((step) => [step.etape.toLowerCase(), step] as const)
+  );
+  steps.forEach((step) => {
+    const matched =
+      (step.journeyStepId ? journeyById.get(step.journeyStepId) : undefined) ??
+      (step.etape ? journeyByLabel.get(step.etape.toLowerCase()) : undefined);
+    const key = matched?.localId ?? resolveStepKey(step);
+    if (!key) return;
+    const periodStart = step.periodStart ?? step.date ?? undefined;
+    const periodEnd = step.periodEnd ?? undefined;
+    const hasPeriod = Boolean(periodStart && periodEnd);
+    map[key] = {
+      periodStart,
+      periodEnd,
+      dateType: hasPeriod ? 'period' : periodStart || periodEnd ? 'date' : undefined,
+    };
+  });
+  return map;
 };
+
+const buildLotDatesMapFromDb = (steps: DbLotTraceStep[], journeySteps: TimelineStep[]) =>
+  buildLotDatesMap(
+    steps.map((step) => ({
+      journeyStepId: step.product_step_id ?? undefined,
+      etape: step.step_label ?? 'Etape',
+      date: step.occurred_at ?? undefined,
+      periodStart: step.period_start ?? undefined,
+      periodEnd: step.period_end ?? undefined,
+    })),
+    journeySteps
+  );
+
+const formatStepLocationLabel = (step: TimelineStep) => {
+  const parts = [
+    step.address,
+    step.addressDetails,
+    step.country,
+    step.postcode,
+    step.city,
+    step.lieu,
+  ]
+    .map((value) => (value ?? '').trim())
+    .filter(Boolean);
+  return parts.length ? parts.join(', ') : 'A preciser';
+};
+
+const buildStepLocationQuery = (step: TimelineStep) => {
+  const parts = [step.address, step.addressDetails, step.postcode, step.city, step.country, step.lieu]
+    .map((value) => (value ?? '').trim())
+    .filter(Boolean);
+  return parts.length ? parts.join(', ') : '';
+};
+
 
 const formatValue = (post: RepartitionPoste) => {
   if (post.type === 'percent') return `${post.valeur}%`;
@@ -150,6 +226,19 @@ const PIE_COLORS = [
   '#43AA8B',
   '#277DA1',
 ];
+
+const NUTRITION_FIELDS = [
+  { key: 'energie', label: 'Energie (kcal)' },
+  { key: 'matieresGrasses', label: 'Matieres grasses (g)' },
+  { key: 'acidesGrasSatures', label: 'Acides gras satures (g)' },
+  { key: 'glucides', label: 'Glucides (g)' },
+  { key: 'sucres', label: 'Sucres (g)' },
+  { key: 'fibres', label: 'Fibres (g)' },
+  { key: 'proteines', label: 'Proteines (g)' },
+  { key: 'sel', label: 'Sel (g)' },
+] as const;
+
+type NutritionFieldKey = (typeof NUTRITION_FIELDS)[number]['key'];
 
 const polarToCartesian = (centerX: number, centerY: number, radius: number, angleInDegrees: number) => {
   const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
@@ -172,6 +261,78 @@ const describeWedge = (x: number, y: number, radius: number, startAngle: number,
 };
 
 const formatPercent = (value: number) => `${Math.round(value)}%`;
+
+const normalizeLabelList = (values?: string[]) =>
+  Array.from(
+    new Set(
+      (values ?? [])
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+  );
+
+const mergeLabelDetailsForEdit = (
+  details?: ProducerLabelDetail[],
+  fallback?: string[]
+) => {
+  const merged = [...(details ?? [])];
+  const known = new Set(
+    merged
+      .map((entry) => normalizeKey(entry.label))
+      .filter(Boolean)
+  );
+  (fallback ?? []).forEach((label) => {
+    const trimmed = label.trim();
+    const key = normalizeKey(trimmed);
+    if (!key || known.has(key)) return;
+    known.add(key);
+    merged.push({ label: trimmed });
+  });
+  return merged;
+};
+
+const mergeLabelDetails = (
+  details?: ProducerLabelDetail[],
+  fallback?: string[]
+) => {
+  const map = new Map<string, ProducerLabelDetail>();
+  (details ?? []).forEach((entry) => {
+    const label = entry.label.trim();
+    if (!label) return;
+    const description = entry.description?.trim();
+    const obtentionYear =
+      typeof entry.obtentionYear === 'number' && Number.isFinite(entry.obtentionYear)
+        ? entry.obtentionYear
+        : undefined;
+    map.set(normalizeKey(label), {
+      label,
+      description: description || undefined,
+      obtentionYear,
+    });
+  });
+  (fallback ?? []).forEach((label) => {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    const key = normalizeKey(trimmed);
+    if (map.has(key)) return;
+    map.set(key, { label: trimmed });
+  });
+  return Array.from(map.values());
+};
+
+const filterLabelDetails = (details: ProducerLabelDetail[], excluded: Set<string>) =>
+  details.filter((entry) => !excluded.has(normalizeKey(entry.label)));
+
+const buildAllergenList = (ingredients: Ingredient[]) => {
+  const values = ingredients
+    .filter((item) => item.isAllergen)
+    .map((item) => (item.allergenType || item.nom || '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(values));
+};
+
+const stripTimelineProof = (steps: TimelineStep[]) =>
+  steps.map(({ preuve: _preuve, localId: _localId, journeyStepId: _journeyStepId, ...rest }) => rest);
 
 const ValuePieChart = ({
   slices,
@@ -249,7 +410,6 @@ const ValuePieChart = ({
             </div>
           </div>
         ))}
-        <p className="pd-chart__note">Camembert calcule automatiquement a partir des couts saisis.</p>
       </div>
     </div>
   );
@@ -268,6 +428,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   isOwner,
   isSaved,
   catalog,
+  supabaseClient,
   onHeaderActionsChange,
   onOpenProducer,
   onOpenRelatedProduct,
@@ -275,33 +436,93 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   onCreateOrder,
   onParticipate,
   onToggleSave,
+  initialLotId,
+  mode = 'view',
+  onCreateProduct,
+  categoryOptions,
+  producerProfileLabels,
 }) => {
+  const isCreateMode = mode === 'create';
   const [draft, setDraft] = React.useState<ProductDetail>(detail);
   const [isFollowing, setIsFollowing] = React.useState(false);
-  const [editMode, setEditMode] = React.useState(false);
+  const [editMode, setEditMode] = React.useState(isCreateMode);
   const [notifyFollowers, setNotifyFollowers] = React.useState(false);
   const [notificationMessage, setNotificationMessage] = React.useState('');
-  const [selectedLotId, setSelectedLotId] = React.useState<string | null>(
-    detail.productions?.find((lot) => lot.statut !== 'epuise')?.id ?? null
-  );
+  const [selectedLotId, setSelectedLotId] = React.useState<string | null>(() => {
+    if (initialLotId) return initialLotId;
+    return detail.productions?.find((lot) => lot.statut !== 'epuise')?.id ?? null;
+  });
+  const [lotList, setLotList] = React.useState<ProductionLot[]>(detail.productions ?? []);
+  const [lotDraft, setLotDraft] = React.useState<ProductionLot | null>(null);
+  const [lotEditMode, setLotEditMode] = React.useState<'create' | 'edit' | null>(null);
   const [localPosts, setLocalPosts] = React.useState<RepartitionPoste[]>(detail.repartitionValeur?.postes ?? []);
   const [activeTab, setActiveTab] = React.useState<DetailTabKey>('circuit');
   const [localMeasurement, setLocalMeasurement] = React.useState<Product['measurement']>(product.measurement);
   const [localUnit, setLocalUnit] = React.useState(product.unit);
+  const [localPrice, setLocalPrice] = React.useState(product.price);
+  const [localWeightKg, setLocalWeightKg] = React.useState<number | ''>(product.weightKg ?? '');
+  const [imageFile, setImageFile] = React.useState<File | null>(null);
+  const [, setImagePreviewUrl] = React.useState<string | null>(null);
+  const [pendingJourneyImages, setPendingJourneyImages] = React.useState<
+    Record<string, { file: File; previewUrl: string }>
+  >({});
+  const [lotStepDatesByLot, setLotStepDatesByLot] = React.useState<Record<string, Record<string, LotStepDates>>>(
+    {}
+  );
+  const [stepGeocodes, setStepGeocodes] = React.useState<Record<string, { lat: number; lng: number }>>({});
   const [draggedStepIndex, setDraggedStepIndex] = React.useState<number | null>(null);
   const [dragOverStepIndex, setDragOverStepIndex] = React.useState<number | null>(null);
   const onToggleSaveRef = React.useRef<typeof onToggleSave>(onToggleSave);
+  const imagePreviewRef = React.useRef<string | null>(null);
+  const journeyMapContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const journeyMapRef = React.useRef<L.Map | null>(null);
+  const journeyMapLayerRef = React.useRef<L.LayerGroup | null>(null);
+  const journeyMarkersRef = React.useRef<Map<string, L.Marker>>(new Map());
+  const geocodeCacheRef = React.useRef<Map<string, { lat: number; lng: number }>>(new Map());
+  const PRODUCT_IMAGE_BUCKET = 'product-images';
+  const JOURNEY_IMAGE_BUCKET = import.meta.env.VITE_PRODUCT_JOURNEY_BUCKET ?? 'product-journey';
+
+  const ensureTimelineIds = React.useCallback(
+    (steps: TimelineStep[]) =>
+      steps.map((step) => (step.localId ? step : { ...step, localId: generateBase62Code(8) })),
+    []
+  );
+
+  const selectedLot = React.useMemo(
+    () => lotList.find((lot) => lot.id === selectedLotId) ?? null,
+    [lotList, selectedLotId]
+  );
 
   const pickupLabel = React.useMemo(
     () => getPrimaryPickupLabel(ordersWithProduct, detail.producer.city),
     [ordersWithProduct, detail.producer.city]
   );
   const fallbackTimeline = React.useMemo(() => buildFallbackTimeline(detail, pickupLabel), [detail, pickupLabel]);
-  const [localTimeline, setLocalTimeline] = React.useState<TimelineStep[]>(fallbackTimeline);
+  const [localTimeline, setLocalTimeline] = React.useState<TimelineStep[]>(() =>
+    ensureTimelineIds(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline)
+  );
+  const loadLotTraceSteps = React.useCallback(
+    async (lotId: string) => {
+      if (lotStepDatesByLot[lotId]) return;
+      if (DEMO_MODE || !supabaseClient || isCreateMode) {
+        setLotStepDatesByLot((prev) => (prev[lotId] ? prev : { ...prev, [lotId]: {} }));
+        return;
+      }
+      const { data, error } = await supabaseClient.from('lot_trace_steps').select('*').eq('lot_id', lotId);
+      if (error) {
+        console.warn('Supabase lot_trace_steps error:', error);
+        setLotStepDatesByLot((prev) => (prev[lotId] ? prev : { ...prev, [lotId]: {} }));
+        return;
+      }
+      const mapped = buildLotDatesMapFromDb((data as DbLotTraceStep[]) ?? [], localTimeline);
+      setLotStepDatesByLot((prev) => ({ ...prev, [lotId]: mapped }));
+    },
+    [isCreateMode, localTimeline, lotStepDatesByLot, supabaseClient]
+  );
 
   React.useEffect(() => {
     const posts = detail.repartitionValeur?.postes ?? [];
-    setLocalPosts(posts.map((post) => ({ ...post, type: 'eur' })));
+    setLocalPosts(posts.map((post) => ({ ...post, type: post.type ?? 'eur' })));
   }, [detail.repartitionValeur?.postes]);
 
   React.useEffect(() => {
@@ -309,17 +530,60 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [detail]);
 
   React.useEffect(() => {
+    setLotList(detail.productions ?? []);
+  }, [detail.productions]);
+
+  React.useEffect(() => {
+    if (initialLotId) {
+      setSelectedLotId(initialLotId);
+      return;
+    }
+    setSelectedLotId(lotList.find((lot) => lot.statut !== 'epuise')?.id ?? null);
+  }, [initialLotId, lotList]);
+
+  React.useEffect(() => {
+    if (!selectedLot?.id) return;
+    if (lotStepDatesByLot[selectedLot.id]) return;
+    void loadLotTraceSteps(selectedLot.id);
+  }, [loadLotTraceSteps, lotStepDatesByLot, selectedLot?.id]);
+
+  React.useEffect(() => {
     onToggleSaveRef.current = onToggleSave;
   }, [onToggleSave]);
 
   React.useEffect(() => {
-    setLocalTimeline(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline);
-  }, [detail, fallbackTimeline]);
+    setLocalTimeline(
+      ensureTimelineIds(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline)
+    );
+    setLotStepDatesByLot({});
+    setStepGeocodes({});
+    geocodeCacheRef.current.clear();
+    setPendingJourneyImages((current) => {
+      Object.values(current).forEach((entry) => {
+        if (entry.previewUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(entry.previewUrl);
+        }
+      });
+      return {};
+    });
+  }, [detail, ensureTimelineIds, fallbackTimeline]);
+
+  React.useEffect(() => {
+    if (!selectedLot?.id) return;
+    if (lotStepDatesByLot[selectedLot.id]) return;
+    if (!detail.tracabilite?.lotTimeline?.length) return;
+    setLotStepDatesByLot((prev) => ({
+      ...prev,
+      [selectedLot.id]: buildLotDatesMap(detail.tracabilite?.lotTimeline ?? [], localTimeline),
+    }));
+  }, [detail.tracabilite?.lotTimeline, localTimeline, lotStepDatesByLot, selectedLot?.id]);
 
   React.useEffect(() => {
     setLocalMeasurement(product.measurement);
     setLocalUnit(product.unit);
-  }, [product.measurement, product.unit]);
+    setLocalPrice(product.price);
+    setLocalWeightKg(product.weightKg ?? '');
+  }, [product.measurement, product.price, product.unit, product.weightKg]);
 
   const display = editMode ? draft : detail;
   const hasOrders = ordersWithProduct.length > 0;
@@ -327,57 +591,289 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     ? `${ordersWithProduct.length} commande${ordersWithProduct.length > 1 ? 's' : ''} disponible`
     : 'Aucune commande active';
 
-  const timelineDisplay = editMode
-    ? localTimeline
-    : detail.tracabilite?.timeline?.length
-    ? detail.tracabilite.timeline
-    : fallbackTimeline;
+  const baseTimeline =
+    detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline;
+  const timelineDisplay = editMode ? localTimeline : baseTimeline;
+  const lotStepDates = selectedLot?.id ? lotStepDatesByLot[selectedLot.id] ?? {} : {};
+  const lotTimelineDisplay = React.useMemo<TimelineStep[]>(
+    () =>
+      localTimeline.map((step) => {
+        const key = resolveStepKey(step);
+        const dates = key ? lotStepDates[key] : undefined;
+        const periodStart = dates?.periodStart;
+        const periodEnd = dates?.periodEnd;
+        const hasPeriod = Boolean(periodStart && periodEnd);
+        const singleDate = hasPeriod ? undefined : periodStart || periodEnd || undefined;
+        return {
+          ...step,
+          periodStart,
+          periodEnd,
+          dateType: hasPeriod ? 'period' : singleDate ? 'date' : undefined,
+          date: singleDate,
+        };
+      }),
+    [localTimeline, lotStepDates]
+  );
+  const journeyStepsForMap = editMode ? localTimeline : timelineDisplay;
+  const journeyMapPoints = React.useMemo(() => {
+    return journeyStepsForMap
+      .map((step, index) => {
+        const key = resolveStepKey(step);
+        if (!key) return null;
+        const lat = step.lat ?? stepGeocodes[key]?.lat;
+        const lng = step.lng ?? stepGeocodes[key]?.lng;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+        return {
+          id: key,
+          orderIndex: index + 1,
+          label: step.etape,
+          locationLabel: formatStepLocationLabel(step),
+          lat: lat as number,
+          lng: lng as number,
+        };
+      })
+      .filter(Boolean) as Array<{
+      id: string;
+      orderIndex: number;
+      label: string;
+      locationLabel: string;
+      lat: number;
+      lng: number;
+    }>;
+  }, [journeyStepsForMap, stepGeocodes]);
 
-  const allBadges = React.useMemo(() => {
-    const badges = [...(display.officialBadges ?? []), ...(display.platformBadges ?? [])]
-      .map((badge) => badge.trim())
-      .filter(Boolean);
-    return Array.from(new Set(badges));
-  }, [display.officialBadges, display.platformBadges]);
+  React.useEffect(() => {
+    if (!journeyStepsForMap.length) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      const pending = journeyStepsForMap
+        .map((step) => {
+          const key = resolveStepKey(step);
+          if (!key) return null;
+          if (Number.isFinite(step.lat) && Number.isFinite(step.lng)) return null;
+          if (stepGeocodes[key]) return null;
+          const query = buildStepLocationQuery(step);
+          if (!query) return null;
+          return { key, query };
+        })
+        .filter(Boolean) as Array<{ key: string; query: string }>;
 
-  const locationStats = React.useMemo(() => {
-    const counts = new Map<string, number>();
-    ordersWithProduct.forEach((order) => {
-      const label =
-        [order.pickupCity, order.pickupPostcode].filter(Boolean).join(' ').trim() ||
-        order.mapLocation?.areaLabel ||
-        order.pickupAddress;
-      if (!label) return;
-      counts.set(label, (counts.get(label) ?? 0) + 1);
+      if (!pending.length) return;
+
+      pending.forEach(async ({ key, query }) => {
+        if (geocodeCacheRef.current.has(query)) {
+          const cached = geocodeCacheRef.current.get(query);
+          if (cached) {
+            setStepGeocodes((prev) => ({ ...prev, [key]: cached }));
+          }
+          return;
+        }
+        try {
+          const encoded = encodeURIComponent(query);
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encoded}&limit=1`,
+            {
+              signal: controller.signal,
+              headers: {
+                'Accept-Language': 'fr',
+                'User-Agent': 'cos-diffusion-product-journey/1.0',
+              },
+            }
+          );
+          if (!response.ok) return;
+          const results = (await response.json()) as Array<{ lat?: string; lon?: string }>;
+          if (!Array.isArray(results) || !results[0]?.lat || !results[0]?.lon) return;
+          const lat = Number(results[0].lat);
+          const lng = Number(results[0].lon);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+          const coords = { lat, lng };
+          geocodeCacheRef.current.set(query, coords);
+          setStepGeocodes((prev) => ({ ...prev, [key]: coords }));
+        } catch {
+          // ignore geocode failures
+        }
+      });
+    }, 500);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [journeyStepsForMap, stepGeocodes]);
+
+  React.useEffect(() => {
+    if (activeTab !== 'circuit') return;
+    const container = journeyMapContainerRef.current;
+    if (!container || journeyMapRef.current) return;
+
+    const map = L.map(container, { zoomControl: true, attributionControl: false }).setView([46.6, 2.5], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    }).addTo(map);
+    journeyMapLayerRef.current = L.layerGroup().addTo(map);
+    journeyMapRef.current = map;
+  }, [activeTab]);
+
+  React.useEffect(() => {
+    if (activeTab === 'circuit') return;
+    if (!journeyMapRef.current) return;
+    journeyMapRef.current.remove();
+    journeyMapRef.current = null;
+    journeyMapLayerRef.current = null;
+    journeyMarkersRef.current.clear();
+  }, [activeTab]);
+
+  React.useEffect(() => {
+    const map = journeyMapRef.current;
+    const layer = journeyMapLayerRef.current;
+    if (!map || !layer) return;
+
+    const nextIds = new Set(journeyMapPoints.map((point) => point.id));
+    journeyMarkersRef.current.forEach((marker, id) => {
+      if (!nextIds.has(id)) {
+        layer.removeLayer(marker);
+        journeyMarkersRef.current.delete(id);
+      }
     });
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 4)
-      .map(([label, count]) => ({ label, count }));
-  }, [ordersWithProduct]);
+
+    journeyMapPoints.forEach((point) => {
+      const existing = journeyMarkersRef.current.get(point.id);
+      if (existing) {
+        existing.setLatLng([point.lat, point.lng]);
+        return;
+      }
+      const icon = L.divIcon({
+        className: 'pd-map-marker',
+        html: `<span>${point.orderIndex}</span>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 30],
+      });
+      const marker = L.marker([point.lat, point.lng], { icon })
+        .addTo(layer)
+        .bindPopup(`<strong>${point.label}</strong><br />${point.locationLabel}`);
+      if (point.orderIndex === 1) {
+        marker.openPopup();
+      }
+      journeyMarkersRef.current.set(point.id, marker);
+    });
+
+    if (journeyMapPoints.length) {
+      const bounds = L.latLngBounds(journeyMapPoints.map((point) => [point.lat, point.lng] as [number, number]));
+      map.fitBounds(bounds.pad(0.25));
+    } else {
+      map.setView([46.6, 2.5], 6);
+    }
+
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 150);
+  }, [journeyMapPoints]);
+
+  const mergedProducerProfileLabels = React.useMemo(() => {
+    const combined = [...(display.producerLabels ?? []), ...(producerProfileLabels ?? [])];
+    const map = new Map<string, ProducerLabelDetail>();
+    combined.forEach((entry) => {
+      const label = entry.label.trim();
+      if (!label) return;
+      const description = entry.description?.trim();
+      const obtentionYear =
+        typeof entry.obtentionYear === 'number' && Number.isFinite(entry.obtentionYear)
+          ? entry.obtentionYear
+          : undefined;
+      map.set(normalizeKey(label), {
+        label,
+        description: description || undefined,
+        obtentionYear,
+      });
+    });
+    return Array.from(map.values());
+  }, [display.producerLabels, producerProfileLabels]);
+
+  const producerLabelKeys = React.useMemo(
+    () => new Set(mergedProducerProfileLabels.map((entry) => normalizeKey(entry.label))),
+    [mergedProducerProfileLabels]
+  );
+
+  const officialBadgeDetails = React.useMemo(() => {
+    const merged = mergeLabelDetails(display.officialBadgeDetails, display.officialBadges);
+    return filterLabelDetails(merged, producerLabelKeys);
+  }, [display.officialBadgeDetails, display.officialBadges, producerLabelKeys]);
+
+  const platformBadgeDetails = React.useMemo(() => {
+    const merged = mergeLabelDetails(display.platformBadgeDetails, display.platformBadges);
+    return filterLabelDetails(merged, producerLabelKeys);
+  }, [display.platformBadgeDetails, display.platformBadges, producerLabelKeys]);
+
+  const productBadgeDetails = React.useMemo(() => {
+    const map = new Map<string, ProducerLabelDetail>();
+    [...officialBadgeDetails, ...platformBadgeDetails].forEach((entry) => {
+      const key = normalizeKey(entry.label);
+      if (!key || map.has(key)) return;
+      map.set(key, entry);
+    });
+    return Array.from(map.values());
+  }, [officialBadgeDetails, platformBadgeDetails]);
+
+  const qualityLabelCount = React.useMemo(() => {
+    const keys = new Set<string>();
+    productBadgeDetails.forEach((entry) => keys.add(normalizeKey(entry.label)));
+    mergedProducerProfileLabels.forEach((entry) => keys.add(normalizeKey(entry.label)));
+    return keys.size;
+  }, [mergedProducerProfileLabels, productBadgeDetails]);
+
+  const displayOfficialBadges = React.useMemo(
+    () => mergeLabelDetails(display.officialBadgeDetails, display.officialBadges).map((entry) => entry.label),
+    [display.officialBadgeDetails, display.officialBadges]
+  );
+  const displayPlatformBadges = React.useMemo(
+    () => mergeLabelDetails(display.platformBadgeDetails, display.platformBadges).map((entry) => entry.label),
+    [display.platformBadgeDetails, display.platformBadges]
+  );
+
+  const draftOfficialBadgeDetails = React.useMemo(() => {
+    const merged = mergeLabelDetailsForEdit(draft.officialBadgeDetails, draft.officialBadges);
+    return filterLabelDetails(merged, producerLabelKeys);
+  }, [draft.officialBadgeDetails, draft.officialBadges, producerLabelKeys]);
+
+  const draftPlatformBadgeDetails = React.useMemo(() => {
+    const merged = mergeLabelDetailsForEdit(draft.platformBadgeDetails, draft.platformBadges);
+    return filterLabelDetails(merged, producerLabelKeys);
+  }, [draft.platformBadgeDetails, draft.platformBadges, producerLabelKeys]);
+
+  const displayAllergens = React.useMemo(() => {
+    if (display.compositionEtiquette?.allergenes?.length) {
+      return display.compositionEtiquette.allergenes;
+    }
+    return buildAllergenList(display.compositionEtiquette?.ingredients ?? []);
+  }, [display.compositionEtiquette]);
 
   const totalParticipants = React.useMemo(
     () => ordersWithProduct.reduce((acc, order) => acc + (order.participants ?? 0), 0),
     [ordersWithProduct]
   );
-  const totalOrderedWeight = React.useMemo(
-    () => ordersWithProduct.reduce((acc, order) => acc + (order.orderedWeight ?? 0), 0),
-    [ordersWithProduct]
-  );
 
   const tabCounts: Record<DetailTabKey, number> = {
-    circuit: timelineDisplay.length + (display.productions?.length ?? 0),
-    quality: allBadges.length,
+    circuit: timelineDisplay.length,
+    quality: qualityLabelCount,
     repartition: localPosts.length,
     consumption: ordersWithProduct.length,
-    transparency:
-      (display.compositionEtiquette?.ingredients?.length ?? 0) + (display.compositionEtiquette?.allergenes?.length ?? 0),
+    transparency: (display.compositionEtiquette?.ingredients?.length ?? 0) + displayAllergens.length,
+    lot: lotList.length,
   };
 
-  const tabStats = TAB_OPTIONS.map((tab) => ({
+  const tabOptions = React.useMemo(() => {
+    if (!isOwner || isCreateMode) return TAB_OPTIONS;
+    return [...TAB_OPTIONS, { id: 'lot' as const, label: 'Lot', icon: Package }];
+  }, [isCreateMode, isOwner]);
+
+  const tabStats = tabOptions.map((tab) => ({
     ...tab,
     value: tabCounts[tab.id] ?? 0,
   }));
+
+  React.useEffect(() => {
+    if (tabOptions.some((tab) => tab.id === activeTab)) return;
+    setActiveTab('circuit');
+  }, [activeTab, tabOptions]);
 
   const toggleFollow = React.useCallback(() => {
     setIsFollowing((prev) => !prev);
@@ -390,7 +886,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [isSaved]);
 
   const handleAddPost = () => {
-    setLocalPosts((prev) => [...prev, { nom: 'Nouveau poste', valeur: 0, type: 'eur' }]);
+    setLocalPosts((prev) => [
+      ...prev,
+      { partiePrenante: '', nom: 'Nouveau poste', valeur: 0, type: 'eur' },
+    ]);
+  };
+
+  const handleRemovePost = (index: number) => {
+    setLocalPosts((prev) => prev.filter((_, idx) => idx !== index));
   };
 
   const handlePostChange = (index: number, key: keyof RepartitionPoste, value: string) => {
@@ -406,27 +909,667 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     );
   };
 
-  const updateTimelineStep = (index: number, patch: Partial<TimelineStep>) => {
-    setLocalTimeline((prev) => prev.map((step, idx) => (idx === index ? { ...step, ...patch } : step)));
+  type BadgeDetailKey = 'officialBadgeDetails' | 'platformBadgeDetails';
+  const resolveBadgeListKey = (key: BadgeDetailKey) =>
+    key === 'officialBadgeDetails' ? 'officialBadges' : 'platformBadges';
+
+  const handleBadgeDetailChange = (
+    key: BadgeDetailKey,
+    index: number,
+    field: 'label' | 'description' | 'obtentionYear',
+    value: string
+  ) => {
+    setDraft((prev) => {
+      const listKey = resolveBadgeListKey(key);
+      const details = filterLabelDetails(
+        mergeLabelDetailsForEdit(prev[key], prev[listKey]),
+        producerLabelKeys
+      );
+      const nextDetails = details.map((entry, idx) => {
+        if (idx !== index) return entry;
+        if (field === 'obtentionYear') {
+          const parsed = value.trim() ? Number(value) : undefined;
+          return {
+            ...entry,
+            obtentionYear: Number.isFinite(parsed) ? parsed : undefined,
+          };
+        }
+        return { ...entry, [field]: value };
+      });
+      const preservedProducerLabels = (prev[listKey] ?? []).filter((label) =>
+        producerLabelKeys.has(normalizeKey(label))
+      );
+      const nextLabels = nextDetails.map((entry) => entry.label.trim()).filter(Boolean);
+      const combinedLabels = normalizeLabelList([...preservedProducerLabels, ...nextLabels]);
+      return {
+        ...prev,
+        [key]: nextDetails.length ? nextDetails : undefined,
+        [listKey]: combinedLabels.length ? combinedLabels : undefined,
+      };
+    });
   };
 
-  const updateTimelineProof = (index: number, patch: { label?: string; url?: string }) => {
-    setLocalTimeline((prev) =>
-      prev.map((step, idx) => {
-        if (idx !== index) return step;
-        const nextProof = { ...(step.preuve ?? { type: 'lien', label: '', url: '' }), ...patch };
-        return { ...step, preuve: nextProof };
-      })
-    );
+  const handleAddBadgeDetail = (key: BadgeDetailKey) => {
+    setDraft((prev) => {
+      const listKey = resolveBadgeListKey(key);
+      const details = filterLabelDetails(
+        mergeLabelDetailsForEdit(prev[key], prev[listKey]),
+        producerLabelKeys
+      );
+      const nextDetails = [
+        ...details,
+        { label: '', description: '', obtentionYear: undefined },
+      ];
+      const preservedProducerLabels = (prev[listKey] ?? []).filter((label) =>
+        producerLabelKeys.has(normalizeKey(label))
+      );
+      const nextLabels = nextDetails.map((entry) => entry.label.trim()).filter(Boolean);
+      const combinedLabels = normalizeLabelList([...preservedProducerLabels, ...nextLabels]);
+      return {
+        ...prev,
+        [key]: nextDetails,
+        [listKey]: combinedLabels.length ? combinedLabels : undefined,
+      };
+    });
   };
+
+  const handleRemoveBadgeDetail = (key: BadgeDetailKey, index: number) => {
+    setDraft((prev) => {
+      const listKey = resolveBadgeListKey(key);
+      const details = filterLabelDetails(
+        mergeLabelDetailsForEdit(prev[key], prev[listKey]),
+        producerLabelKeys
+      );
+      const nextDetails = details.filter((_, idx) => idx !== index);
+      const preservedProducerLabels = (prev[listKey] ?? []).filter((label) =>
+        producerLabelKeys.has(normalizeKey(label))
+      );
+      const nextLabels = nextDetails.map((entry) => entry.label.trim()).filter(Boolean);
+      const combinedLabels = normalizeLabelList([...preservedProducerLabels, ...nextLabels]);
+      return {
+        ...prev,
+        [key]: nextDetails.length ? nextDetails : undefined,
+        [listKey]: combinedLabels.length ? combinedLabels : undefined,
+      };
+    });
+  };
+
+const updateTimelineStep = (index: number, patch: Partial<TimelineStep>) => {
+  setLocalTimeline((prev) => prev.map((step, idx) => (idx === index ? { ...step, ...patch } : step)));
+};
+
+const buildJourneyLocationPayload = (step: TimelineStep) => {
+  const locationLabel = buildStepLocationQuery(step);
+  return {
+    location: locationLabel || null,
+    location_address: step.address?.trim() || null,
+    location_details: step.addressDetails?.trim() || null,
+    location_country: step.country?.trim() || null,
+    location_postcode: step.postcode?.trim() || null,
+    location_city: step.city?.trim() || null,
+    location_lat: Number.isFinite(step.lat) ? step.lat : null,
+    location_lng: Number.isFinite(step.lng) ? step.lng : null,
+  };
+};
+
+const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
+  const periodStart = dates.periodStart?.trim() || undefined;
+  const periodEnd = dates.periodEnd?.trim() || undefined;
+    const hasPeriod = Boolean(periodStart && periodEnd);
+    return {
+      periodStart,
+      periodEnd,
+      dateType: hasPeriod ? 'period' : periodStart || periodEnd ? 'date' : undefined,
+    };
+  };
+
+  const updateLotStepDates = React.useCallback(
+    (lotId: string, stepKey: string, nextDates: LotStepDates) => {
+      setLotStepDatesByLot((prev) => ({
+        ...prev,
+        [lotId]: {
+          ...(prev[lotId] ?? {}),
+          [stepKey]: normalizeLotDates(nextDates),
+        },
+      }));
+    },
+    [normalizeLotDates]
+  );
+
+  const createTimelineStep = React.useCallback(
+    () => ({
+      localId: generateBase62Code(8),
+      etape: 'Nouvelle etape',
+      description: '',
+      address: '',
+      addressDetails: '',
+      country: 'France',
+      postcode: '',
+      city: '',
+      lieu: '',
+    }),
+    []
+  );
 
   const handleAddTimelineStep = () => {
-    setLocalTimeline((prev) => [...prev, { etape: 'Nouvelle etape', lieu: '', date: '' }]);
+    setLocalTimeline((prev) => [...prev, createTimelineStep()]);
   };
 
   const handleRemoveTimelineStep = (index: number) => {
+    const step = localTimeline[index];
+    const stepKey = step ? resolveStepKey(step) : undefined;
+    if (step?.localId && pendingJourneyImages[step.localId]?.previewUrl?.startsWith('blob:')) {
+      URL.revokeObjectURL(pendingJourneyImages[step.localId].previewUrl);
+    }
+    if (step?.localId) {
+      setPendingJourneyImages((current) => {
+        const next = { ...current };
+        delete next[step.localId as string];
+        return next;
+      });
+    }
+    if (stepKey) {
+      setLotStepDatesByLot((prev) => {
+        const next = { ...prev };
+        Object.keys(next).forEach((lotId) => {
+          if (!next[lotId]?.[stepKey]) return;
+          const lotSteps = { ...next[lotId] };
+          delete lotSteps[stepKey];
+          next[lotId] = lotSteps;
+        });
+        return next;
+      });
+    }
     setLocalTimeline((prev) => prev.filter((_, idx) => idx !== index));
   };
+
+  const handleIngredientChange = (index: number, patch: Partial<Ingredient>) => {
+    setDraft((prev) => {
+      const ingredients = [...(prev.compositionEtiquette?.ingredients ?? [])];
+      const current = ingredients[index] ?? { nom: '' };
+      const nextIngredient = { ...current, ...patch };
+      if (!nextIngredient.isAllergen) {
+        nextIngredient.allergenType = undefined;
+      }
+      ingredients[index] = nextIngredient;
+      const allergenes = buildAllergenList(ingredients);
+      return {
+        ...prev,
+        compositionEtiquette: {
+          ...(prev.compositionEtiquette ?? {}),
+          ingredients,
+          allergenes: allergenes.length ? allergenes : undefined,
+        },
+      };
+    });
+  };
+
+  const handleAddIngredient = () => {
+    setDraft((prev) => {
+      const ingredients = [...(prev.compositionEtiquette?.ingredients ?? []), { nom: '', isAllergen: false }];
+      const allergenes = buildAllergenList(ingredients);
+      return {
+        ...prev,
+        compositionEtiquette: {
+          ...(prev.compositionEtiquette ?? {}),
+          ingredients,
+          allergenes: allergenes.length ? allergenes : undefined,
+        },
+      };
+    });
+  };
+
+  const handleRemoveIngredient = (index: number) => {
+    setDraft((prev) => {
+      const ingredients = (prev.compositionEtiquette?.ingredients ?? []).filter((_, idx) => idx !== index);
+      const allergenes = buildAllergenList(ingredients);
+      return {
+        ...prev,
+        compositionEtiquette: {
+          ...(prev.compositionEtiquette ?? {}),
+          ingredients,
+          allergenes: allergenes.length ? allergenes : undefined,
+        },
+      };
+    });
+  };
+
+  const handleNutritionChange = (key: NutritionFieldKey, value: string) => {
+    setDraft((prev) => {
+      const nextNutrition = { ...(prev.compositionEtiquette?.nutrition ?? {}) };
+      if (value.trim()) {
+        nextNutrition[key] = value.trim();
+      } else {
+        delete nextNutrition[key];
+      }
+      return {
+        ...prev,
+        compositionEtiquette: {
+          ...(prev.compositionEtiquette ?? {}),
+          nutrition: Object.keys(nextNutrition).length ? nextNutrition : undefined,
+        },
+      };
+    });
+  };
+
+  const clearImagePreview = React.useCallback(() => {
+    if (imagePreviewRef.current) {
+      if (imagePreviewRef.current.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreviewRef.current);
+      }
+      imagePreviewRef.current = null;
+    }
+    setImagePreviewUrl(null);
+  }, []);
+
+  const applyProductImagePreview = React.useCallback(
+    (file: File, nextUrl: string, trackObjectUrl: boolean) => {
+      clearImagePreview();
+      imagePreviewRef.current = trackObjectUrl ? nextUrl : null;
+      setImagePreviewUrl(nextUrl);
+      setImageFile(file);
+      setDraft((prev) => ({
+        ...prev,
+        productImage: {
+          ...(prev.productImage ?? { url: '', alt: prev.name || 'Produit' }),
+          url: nextUrl,
+          alt: prev.productImage?.alt ?? prev.name,
+        },
+      }));
+    },
+    [clearImagePreview]
+  );
+
+  const handleProductImageChange = React.useCallback(
+    async ({ file, previewUrl }: { file: File; previewUrl: string }) => {
+      if (DEMO_MODE || !supabaseClient || isCreateMode) {
+        applyProductImagePreview(file, previewUrl, true);
+        return;
+      }
+
+      const productCode = product.productCode ?? product.id;
+      if (!productCode || productCode === 'draft') {
+        applyProductImagePreview(file, previewUrl, true);
+        return;
+      }
+
+      const { data: productRow, error: productError } = await supabaseClient
+        .from('products')
+        .select('id')
+        .eq('product_code', productCode)
+        .maybeSingle();
+
+      if (productError || !productRow?.id) {
+        throw new Error('Produit introuvable.');
+      }
+
+      const productId = productRow.id as string;
+      const fileExtension = file.type === 'image/webp' ? 'webp' : 'webp';
+      const targetPath = `${productId}/product-${Date.now()}.${fileExtension}`;
+      let uploadedPath: string | null = null;
+
+      try {
+        const { error: uploadError } = await supabaseClient.storage
+          .from(PRODUCT_IMAGE_BUCKET)
+          .upload(targetPath, file, {
+            upsert: false,
+            contentType: file.type || 'image/webp',
+            cacheControl: '3600',
+          });
+        if (uploadError) {
+          throw uploadError;
+        }
+        uploadedPath = targetPath;
+
+        const { data: existingImages, error: existingError } = await supabaseClient
+          .from('product_images')
+          .select('id, sort_order, is_primary')
+          .eq('product_id', productId);
+
+        if (existingError) {
+          throw existingError;
+        }
+
+        const nextSortOrder =
+          (existingImages ?? []).reduce((max, entry) => Math.max(max, entry.sort_order ?? 0), -1) + 1;
+
+        const { error: updateError } = await supabaseClient
+          .from('product_images')
+          .update({ is_primary: false })
+          .eq('product_id', productId)
+          .eq('is_primary', true);
+
+        if (updateError) {
+          throw updateError;
+        }
+
+        const altText = (draft.productImage?.alt ?? draft.name ?? product.name ?? '').trim() || null;
+        const { error: insertError } = await supabaseClient.from('product_images').insert({
+          product_id: productId,
+          path: targetPath,
+          alt: altText,
+          sort_order: nextSortOrder,
+          is_primary: true,
+        });
+
+        if (insertError) {
+          throw insertError;
+        }
+
+        const { data: publicData } = supabaseClient.storage
+          .from(PRODUCT_IMAGE_BUCKET)
+          .getPublicUrl(targetPath);
+        const publicUrl = publicData?.publicUrl || previewUrl;
+        if (publicUrl !== previewUrl && previewUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(previewUrl);
+        }
+        applyProductImagePreview(file, publicUrl, false);
+        toast.success('Image du produit mise a jour.');
+      } catch (err) {
+        if (uploadedPath) {
+          try {
+            await supabaseClient.storage.from(PRODUCT_IMAGE_BUCKET).remove([uploadedPath]);
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        throw err;
+      }
+    },
+    [
+      applyProductImagePreview,
+      draft.name,
+      draft.productImage?.alt,
+      isCreateMode,
+      product.id,
+      product.name,
+      product.productCode,
+      supabaseClient,
+      ]
+    );
+
+  const queueJourneyImage = React.useCallback((localId: string, file: File, previewUrl: string) => {
+    setPendingJourneyImages((prev) => {
+      const existing = prev[localId];
+      if (existing?.previewUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(existing.previewUrl);
+      }
+      return {
+        ...prev,
+        [localId]: { file, previewUrl },
+      };
+    });
+  }, []);
+
+  const applyJourneyImagePreview = React.useCallback(
+    (index: number, previewUrl: string, label: string, localId: string) => {
+      updateTimelineStep(index, {
+        localId,
+        preuve: { type: 'lien', label: label || 'Image', url: previewUrl },
+      });
+    },
+    [updateTimelineStep]
+  );
+
+  const handleJourneyImageChange = React.useCallback(
+    async (index: number, { file, previewUrl }: { file: File; previewUrl: string }) => {
+      const currentStep = localTimeline[index];
+      const nextLocalId = currentStep?.localId ?? generateBase62Code(8);
+      const stepLabel = (currentStep?.etape ?? '').trim() || 'Etape';
+
+      if (!currentStep?.localId) {
+        updateTimelineStep(index, { localId: nextLocalId });
+      }
+
+      if (DEMO_MODE || !supabaseClient || isCreateMode) {
+        applyJourneyImagePreview(index, previewUrl, stepLabel, nextLocalId);
+        queueJourneyImage(nextLocalId, file, previewUrl);
+        return;
+      }
+
+      const productCode = product.productCode ?? product.id;
+      if (!productCode || productCode === 'draft') {
+        applyJourneyImagePreview(index, previewUrl, stepLabel, nextLocalId);
+        queueJourneyImage(nextLocalId, file, previewUrl);
+        return;
+      }
+
+      const { data: productRow, error: productError } = await supabaseClient
+        .from('products')
+        .select('id')
+        .eq('product_code', productCode)
+        .maybeSingle();
+
+      if (productError || !productRow?.id) {
+        throw new Error('Produit introuvable.');
+      }
+
+      const productId = productRow.id as string;
+      let journeyStepId = currentStep?.journeyStepId ?? null;
+      let createdStep = false;
+
+      if (!journeyStepId) {
+        const locationPayload = buildJourneyLocationPayload(
+          currentStep ?? ({ etape: stepLabel } as TimelineStep)
+        );
+        const { data: created, error: createError } = await supabaseClient
+          .from('product_journey_steps')
+          .insert({
+            product_id: productId,
+            step_label: stepLabel,
+            description: null,
+            location: locationPayload.location,
+            location_address: locationPayload.location_address,
+            location_details: locationPayload.location_details,
+            location_postcode: locationPayload.location_postcode,
+            location_city: locationPayload.location_city,
+            location_lat: locationPayload.location_lat,
+            location_lng: locationPayload.location_lng,
+            sort_order: index,
+          })
+          .select('id')
+          .maybeSingle();
+
+        if (createError || !created?.id) {
+          throw createError ?? new Error("Impossible de creer l'etape.");
+        }
+        journeyStepId = created.id;
+        createdStep = true;
+        updateTimelineStep(index, { journeyStepId: journeyStepId ?? undefined, localId: nextLocalId });
+      }
+
+      const targetPath = `${productId}/journey-${journeyStepId}-${Date.now()}.webp`;
+      let uploadedPath: string | null = null;
+      try {
+        const { error: uploadError } = await supabaseClient.storage
+          .from(JOURNEY_IMAGE_BUCKET)
+          .upload(targetPath, file, {
+            upsert: false,
+            contentType: file.type || 'image/webp',
+            cacheControl: '3600',
+          });
+        if (uploadError) {
+          throw uploadError;
+        }
+        uploadedPath = targetPath;
+
+        const locationPayload = buildJourneyLocationPayload(
+          currentStep ?? ({ etape: stepLabel } as TimelineStep)
+        );
+        const { error: updateError } = await supabaseClient
+          .from('product_journey_steps')
+          .update({
+            evidence_path: targetPath,
+            evidence_label: stepLabel,
+            location: locationPayload.location,
+            location_address: locationPayload.location_address,
+            location_details: locationPayload.location_details,
+            location_postcode: locationPayload.location_postcode,
+            location_city: locationPayload.location_city,
+            location_lat: locationPayload.location_lat,
+            location_lng: locationPayload.location_lng,
+          })
+          .eq('id', journeyStepId);
+
+        if (updateError) {
+          throw updateError;
+        }
+
+        const { data: publicData } = supabaseClient.storage
+          .from(JOURNEY_IMAGE_BUCKET)
+          .getPublicUrl(targetPath);
+        const publicUrl = publicData?.publicUrl || previewUrl;
+
+        if (publicUrl !== previewUrl && previewUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(previewUrl);
+        }
+
+        updateTimelineStep(index, {
+          localId: nextLocalId,
+          journeyStepId: journeyStepId ?? undefined,
+          preuve: { type: 'lien', label: stepLabel, url: publicUrl },
+        });
+        setPendingJourneyImages((current) => {
+          if (!current[nextLocalId]) return current;
+          const next = { ...current };
+          delete next[nextLocalId];
+          return next;
+        });
+        if (createdStep) {
+          toast.success('Etape ajoutee avec image.');
+        } else {
+          toast.success("Image de l'etape mise a jour.");
+        }
+      } catch (err) {
+        if (uploadedPath) {
+          try {
+            await supabaseClient.storage.from(JOURNEY_IMAGE_BUCKET).remove([uploadedPath]);
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        throw err;
+      }
+    },
+    [
+      JOURNEY_IMAGE_BUCKET,
+      applyJourneyImagePreview,
+      isCreateMode,
+      localTimeline,
+      product.id,
+      product.productCode,
+      queueJourneyImage,
+      supabaseClient,
+      updateTimelineStep,
+    ]
+  );
+
+  const persistLotStepDates = React.useCallback(
+    async (step: TimelineStep, index: number, dates: LotStepDates) => {
+      if (DEMO_MODE || !supabaseClient || isCreateMode) return;
+      if (!selectedLot?.id) return;
+
+      const productCode = product.productCode ?? product.id;
+      if (!productCode || productCode === 'draft') return;
+
+      const { data: productRow, error: productError } = await supabaseClient
+        .from('products')
+        .select('id')
+        .eq('product_code', productCode)
+        .maybeSingle();
+
+      if (productError || !productRow?.id) {
+        throw new Error('Produit introuvable.');
+      }
+
+      const productId = productRow.id as string;
+      let journeyStepId = step.journeyStepId ?? null;
+
+      if (!journeyStepId) {
+        const locationPayload = buildJourneyLocationPayload(step);
+        const { data: created, error: createError } = await supabaseClient
+          .from('product_journey_steps')
+          .insert({
+            product_id: productId,
+            step_label: step.etape,
+            description: step.description ?? null,
+            location: locationPayload.location,
+            location_address: locationPayload.location_address,
+            location_details: locationPayload.location_details,
+            location_postcode: locationPayload.location_postcode,
+            location_city: locationPayload.location_city,
+            location_lat: locationPayload.location_lat,
+            location_lng: locationPayload.location_lng,
+            sort_order: index,
+          })
+          .select('id')
+          .maybeSingle();
+
+        if (createError || !created?.id) {
+          throw createError ?? new Error("Impossible de creer l'etape.");
+        }
+        journeyStepId = created.id;
+        updateTimelineStep(index, { journeyStepId: journeyStepId ?? undefined });
+      }
+
+      const normalized = normalizeLotDates(dates);
+      const hasPeriod = normalized.dateType === 'period';
+      const occurredAt = hasPeriod ? null : normalized.periodStart ?? normalized.periodEnd ?? null;
+      const payload = {
+        lot_id: selectedLot.id,
+        product_step_id: journeyStepId,
+        step_label: step.etape,
+        location: buildStepLocationQuery(step) || null,
+        occurred_at: occurredAt,
+        period_start: hasPeriod ? normalized.periodStart ?? null : null,
+        period_end: hasPeriod ? normalized.periodEnd ?? null : null,
+      };
+
+      const { data: existing, error: existingError } = await supabaseClient
+        .from('lot_trace_steps')
+        .select('id')
+        .eq('lot_id', selectedLot.id)
+        .eq('product_step_id', journeyStepId)
+        .maybeSingle();
+
+      if (existingError) {
+        throw existingError;
+      }
+
+      if (existing?.id) {
+        const { error: updateError } = await supabaseClient
+          .from('lot_trace_steps')
+          .update(payload)
+          .eq('id', existing.id);
+        if (updateError) throw updateError;
+        return;
+      }
+
+      if (!occurredAt && !payload.period_start && !payload.period_end) return;
+
+      const { error: insertError } = await supabaseClient.from('lot_trace_steps').insert(payload);
+      if (insertError) throw insertError;
+    },
+    [isCreateMode, normalizeLotDates, product.id, product.productCode, selectedLot?.id, supabaseClient, updateTimelineStep]
+  );
+
+  const handleLotDateChange = React.useCallback(
+    (step: TimelineStep, index: number, patch: Partial<LotStepDates>) => {
+      if (!selectedLot?.id) return;
+      const stepKey = resolveStepKey(step);
+      if (!stepKey) return;
+      const current = lotStepDatesByLot[selectedLot.id]?.[stepKey] ?? {};
+      const next = { ...current, ...patch };
+      updateLotStepDates(selectedLot.id, stepKey, next);
+      void persistLotStepDates(step, index, next).catch((err) => {
+        console.error('Lot trace update error:', err);
+        toast.error('Mise a jour des dates du lot impossible.');
+      });
+    },
+    [lotStepDatesByLot, persistLotStepDates, selectedLot?.id, updateLotStepDates]
+  );
+
+  React.useEffect(() => () => clearImagePreview(), [clearImagePreview]);
 
   const reorderTimelineStep = (from: number, to: number) => {
     setLocalTimeline((prev) => {
@@ -479,14 +1622,16 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   React.useEffect(() => {
     if (!editMode) return;
+    const unitReference = localMeasurement === 'kg' ? 'kg' : 'piece';
     setDraft((prev) => ({
       ...prev,
       repartitionValeur: {
-        ...(prev.repartitionValeur || { mode: 'estimatif', uniteReference: 'kg', postes: [] }),
+        ...(prev.repartitionValeur || { mode: 'detaille', uniteReference: unitReference, postes: [] }),
+        uniteReference: unitReference,
         postes: localPosts,
       },
     }));
-  }, [editMode, localPosts]);
+  }, [editMode, localMeasurement, localPosts]);
 
   React.useEffect(() => {
     if (!editMode) return;
@@ -499,19 +1644,216 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     }));
   }, [editMode, localTimeline]);
 
-  const totalPosts = localPosts.reduce((acc, post) => acc + (Number.isFinite(post.valeur) ? post.valeur : 0), 0);
-  const expectedTotal = detail.repartitionValeur?.totalReference;
-  const hasGap =
-    typeof expectedTotal === 'number' && expectedTotal > 0 ? Math.abs(totalPosts - expectedTotal) > 0.5 : false;
+  const availableCategories = categoryOptions?.length ? categoryOptions : PRODUCT_CATEGORIES;
+  const normalizedDraftCategory = (draft.category || '').trim();
+  const selectedCategory = availableCategories.includes(normalizedDraftCategory) ? normalizedDraftCategory : '';
 
   const editCTA = (
     <div className="pd-inline-note">
       <Info size={16} />
-      <span>Mode éditeur : éditez le produit (actuellement sauvegarde fictive pour le prototype).</span>
+      <span>
+        {isCreateMode
+          ? 'Creation du produit : renseignez les champs pour publier.'
+          : 'Mode editeur : editez le produit (actuellement sauvegarde fictive pour le prototype).'}
+      </span>
     </div>
   );
 
+  const buildCreatePayload = (): CreateProductPayload | null => {
+    const name = (draft.name || '').trim();
+    if (!name) {
+      toast.error('Ajoutez un nom de produit.');
+      return null;
+    }
+    const category = normalizedDraftCategory;
+    if (!category) {
+      toast.error('Ajoutez une categorie.');
+      return null;
+    }
+    if (!availableCategories.includes(category)) {
+      toast.error('Choisissez une categorie dans la liste.');
+      return null;
+    }
+    const description = (draft.shortDescription || draft.longDescription || '').trim();
+    const imageUrl = (draft.productImage?.url || product.imageUrl || '').trim();
+    const unitValue = (localUnit || '').trim() || (localMeasurement === 'kg' ? 'kg' : 'unit');
+    const priceValue = Number.isFinite(localPrice) ? localPrice : 0;
+    const weightValue =
+      typeof localWeightKg === 'number'
+        ? localWeightKg
+        : Number.isFinite(Number(localWeightKg))
+          ? Number(localWeightKg)
+          : null;
+    if (priceValue <= 0) {
+      toast.error('Ajoutez un prix.');
+      return null;
+    }
+    const productCode = product.productCode || generateBase62Code(16);
+    const producerLabelKeySet = new Set(
+      mergedProducerProfileLabels.map((entry) => normalizeKey(entry.label))
+    );
+    const officialBadgeDetails = filterLabelDetails(
+      mergeLabelDetails(draft.officialBadgeDetails, draft.officialBadges),
+      producerLabelKeySet
+    );
+    const platformBadgeDetails = filterLabelDetails(
+      mergeLabelDetails(draft.platformBadgeDetails, draft.platformBadges),
+      producerLabelKeySet
+    );
+    const officialBadges = normalizeLabelList(officialBadgeDetails.map((entry) => entry.label));
+    const platformBadges = normalizeLabelList(platformBadgeDetails.map((entry) => entry.label));
+    const normalizedIngredients = (draft.compositionEtiquette?.ingredients ?? [])
+      .map((ingredient) => ({
+        ...ingredient,
+        nom: ingredient.nom.trim(),
+        allergenType: ingredient.isAllergen
+          ? (ingredient.allergenType || ingredient.nom || '').trim() || undefined
+          : undefined,
+      }))
+      .filter((ingredient) => ingredient.nom);
+    const allergenes = buildAllergenList(normalizedIngredients);
+    const nutritionEntries = Object.entries(draft.compositionEtiquette?.nutrition ?? {}).filter(([, value]) =>
+      String(value || '').trim()
+    );
+    const nutrition = nutritionEntries.length
+      ? (Object.fromEntries(nutritionEntries) as NutritionFacts)
+      : undefined;
+    const additifs = normalizeLabelList(draft.compositionEtiquette?.additifs);
+    const compositionEtiquette =
+      normalizedIngredients.length ||
+      allergenes.length ||
+      additifs.length ||
+      nutrition ||
+      draft.compositionEtiquette?.conseilsUtilisation ||
+      draft.compositionEtiquette?.conservationDetaillee
+        ? {
+            ingredients: normalizedIngredients.length ? normalizedIngredients : undefined,
+            allergenes: allergenes.length ? allergenes : undefined,
+            additifs: additifs.length ? additifs : undefined,
+            nutrition,
+            conseilsUtilisation: draft.compositionEtiquette?.conseilsUtilisation || undefined,
+            conservationDetaillee: draft.compositionEtiquette?.conservationDetaillee || undefined,
+          }
+        : undefined;
+    const detailPayload: ProductDetail = {
+      ...draft,
+      productId: productCode,
+      name,
+      category,
+      shortDescription: description,
+      longDescription: draft.longDescription?.trim() || description,
+      productImage: imageUrl ? { url: imageUrl, alt: draft.productImage?.alt ?? name } : undefined,
+      officialBadges: officialBadges.length ? officialBadges : undefined,
+      platformBadges: platformBadges.length ? platformBadges : undefined,
+      officialBadgeDetails: officialBadgeDetails.length ? officialBadgeDetails : undefined,
+      platformBadgeDetails: platformBadgeDetails.length ? platformBadgeDetails : undefined,
+      compositionEtiquette,
+      conditionnementPrincipal: unitValue,
+      tracabilite: {
+        ...(draft.tracabilite ?? {}),
+        timeline: localTimeline.length ? stripTimelineProof(localTimeline) : undefined,
+      },
+      repartitionValeur: {
+        ...(draft.repartitionValeur ?? {
+          mode: 'detaille',
+          uniteReference: localMeasurement === 'kg' ? 'kg' : 'piece',
+          postes: [],
+        }),
+        mode: draft.repartitionValeur?.mode ?? 'detaille',
+        uniteReference: localMeasurement === 'kg' ? 'kg' : 'piece',
+        postes: localPosts,
+      },
+      productions: lotList,
+    };
+
+    const inStockValue = lotList.some((lot) => lot.statut !== 'epuise');
+    const journeyImageFiles = Object.entries(pendingJourneyImages).map(([localId, entry]) => {
+      const step = localTimeline.find((item) => item.localId === localId);
+      const stepLabel = (step?.etape ?? '').trim() || 'Etape';
+      return {
+        localId,
+        stepLabel,
+        file: entry.file,
+        previewUrl: entry.previewUrl,
+      };
+    });
+    const lotTraceSteps = Object.entries(lotStepDatesByLot)
+      .flatMap(([lotId, steps]) =>
+        Object.entries(steps).map(([stepKey, dates]) => {
+          const step = localTimeline.find((item) => resolveStepKey(item) === stepKey);
+          const normalized = normalizeLotDates(dates);
+          if (!normalized.periodStart && !normalized.periodEnd) return null;
+          return {
+            lotId,
+            stepKey,
+            journeyStepId: step?.journeyStepId,
+            stepLabel: step?.etape ?? stepKey,
+            periodStart: normalized.periodStart,
+            periodEnd: normalized.periodEnd,
+            dateType: normalized.dateType,
+          };
+        })
+      )
+      .filter(Boolean) as CreateProductPayload['lotTraceSteps'];
+
+    return {
+      product: {
+        productCode,
+        slug: slugify(name),
+        name,
+        description,
+        price: priceValue,
+        unit: unitValue,
+        category,
+        imageUrl,
+        producerId: product.producerId,
+        producerName: product.producerName,
+        producerLocation: product.producerLocation,
+        inStock: inStockValue,
+        measurement: localMeasurement,
+        weightKg: weightValue && weightValue > 0 ? weightValue : undefined,
+      } as CreateProductPayload['product'],
+      detail: detailPayload,
+      imageFile,
+      journeyImageFiles: journeyImageFiles.length ? journeyImageFiles : undefined,
+      lotTraceSteps: lotTraceSteps?.length ? lotTraceSteps : undefined,
+    };
+  };
+
+  const resetCreateForm = () => {
+    setDraft(detail);
+    setLocalMeasurement(product.measurement);
+    setLocalUnit(product.unit);
+    setLocalPrice(product.price);
+    setLocalWeightKg(product.weightKg ?? '');
+    clearImagePreview();
+    setImageFile(null);
+    setNotificationMessage('');
+    setNotifyFollowers(false);
+    setLocalTimeline(fallbackTimeline);
+    setPendingJourneyImages((current) => {
+      Object.values(current).forEach((entry) => {
+        if (entry.previewUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(entry.previewUrl);
+        }
+      });
+      return {};
+    });
+    setLotStepDatesByLot({});
+    setLotList(detail.productions ?? []);
+    setLotDraft(null);
+    setLotEditMode(null);
+    setSelectedLotId(initialLotId ?? null);
+  };
+
   const handleSaveEdit = () => {
+    if (isCreateMode) {
+      if (!onCreateProduct) return;
+      const payload = buildCreatePayload();
+      if (!payload) return;
+      onCreateProduct(payload);
+      return;
+    }
     setEditMode(false);
     toast.success('Modifications enregistrees (demo).');
     if (notifyFollowers && !notificationMessage.trim()) {
@@ -519,7 +1861,87 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     }
   };
 
-  const selectedLot = detail.productions?.find((lot) => lot.id === selectedLotId);
+  const handleCancelEdit = () => {
+    if (isCreateMode) {
+      resetCreateForm();
+      return;
+    }
+    setEditMode(false);
+  };
+
+  const createLotDraft = (): ProductionLot => ({
+    id: `lot-${generateBase62Code(8)}`,
+    nomLot: '',
+    debut: '',
+    fin: '',
+    periodeDisponibilite: { debut: '', fin: '' },
+    qteTotale: 0,
+    qteRestante: 0,
+    DLC_DDM: '',
+    commentaire: '',
+    numeroLot: '',
+    statut: 'a_venir',
+  });
+
+  const handleAddLot = () => {
+    setLotDraft(createLotDraft());
+    setLotEditMode('create');
+  };
+
+  const handleEditLot = (lot: ProductionLot) => {
+    setLotDraft({
+      ...lot,
+      periodeDisponibilite: lot.periodeDisponibilite ?? { debut: lot.debut, fin: lot.fin },
+    });
+    setLotEditMode('edit');
+    setSelectedLotId(lot.id);
+  };
+
+  const handleLotDraftChange = (patch: Partial<ProductionLot>) => {
+    setLotDraft((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, ...patch };
+      if (patch.debut !== undefined || patch.fin !== undefined) {
+        next.periodeDisponibilite = {
+          debut: patch.debut ?? prev.debut,
+          fin: patch.fin ?? prev.fin,
+        };
+      }
+      return next;
+    });
+  };
+
+  const handleCancelLotEdit = () => {
+    setLotDraft(null);
+    setLotEditMode(null);
+  };
+
+  const handleSaveLot = () => {
+    if (!lotDraft) return;
+    if (!lotDraft.nomLot.trim()) {
+      toast.error('Ajoutez un nom de lot.');
+      return;
+    }
+    if (!lotDraft.debut || !lotDraft.fin) {
+      toast.error('Ajoutez des dates de debut et de fin.');
+      return;
+    }
+    const normalized = {
+      ...lotDraft,
+      periodeDisponibilite: { debut: lotDraft.debut, fin: lotDraft.fin },
+    };
+    setLotList((prev) => {
+      if (lotEditMode === 'edit') {
+        return prev.map((item) => (item.id === normalized.id ? normalized : item));
+      }
+      return [normalized, ...prev];
+    });
+    setSelectedLotId(normalized.id);
+    setLotStepDatesByLot((prev) => (prev[normalized.id] ? prev : { ...prev, [normalized.id]: {} }));
+    setLotDraft(null);
+    setLotEditMode(null);
+    toast.success(lotEditMode === 'edit' ? 'Lot mis a jour (demo).' : 'Lot ajoute (demo).');
+  };
 
   const handleOpenProducer = React.useCallback(() => {
     onOpenProducer?.(product);
@@ -545,12 +1967,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     if (match) return { product: match, isCatalog: true };
     const fallbackPrice = detail.priceReference?.prixIndicatifUnitaire ?? product.price;
     const fallbackProduct: Product = {
+      ...product,
       id: item.id,
       name: item.name,
       description: item.category ?? product.description,
       price: fallbackPrice,
       unit: product.unit,
-      quantity: product.quantity,
       category: item.category ?? product.category,
       imageUrl: displayImage || product.imageUrl,
       producerId: displayProducer.id ?? product.producerId,
@@ -581,176 +2003,146 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               </button>
             ) : null}
           </div>
-
           {timelineDisplay.length ? (
             <div className="pd-timeline">
               <div className="pd-timeline__line" />
-              <div className="pd-stack pd-stack--lg pd-timeline__list">
+              <div className="pd-timeline__list">
                 {timelineDisplay.map((step, index) => {
-                  const hasPhoto = Boolean(step.preuve?.url);
-                  const periodStart = (step.periodStart || '').trim();
-                  const periodEnd = (step.periodEnd || '').trim();
-                  const stepMode = step.dateType ?? (periodStart || periodEnd ? 'period' : 'date');
                   const isDragging = draggedStepIndex === index;
-                  const isDragOver = dragOverStepIndex === index;
-                  const dateLabel =
-                    stepMode === 'period'
-                      ? periodStart && periodEnd
-                        ? `Du ${periodStart} au ${periodEnd}`
-                        : periodStart
-                        ? `Depuis ${periodStart}`
-                        : periodEnd
-                        ? `Jusqu'au ${periodEnd}`
-                        : 'Periode a preciser'
-                      : step.date || 'Date a preciser';
+                  const isOver = dragOverStepIndex === index;
+                  const stepImageUrl = step.preuve?.url;
+                  const stepImageLabel = step.preuve?.label ?? step.etape ?? 'Etape';
                   return (
                     <div
-                      key={`${step.etape}-${index}`}
+                      key={step.localId ?? `${step.etape}-${index}`}
                       className={`pd-timeline__item${isDragging ? ' pd-timeline__item--dragging' : ''}${
-                        isDragOver ? ' pd-timeline__item--over' : ''
+                        isOver ? ' pd-timeline__item--over' : ''
                       }`}
                       onDragOver={handleTimelineDragOver(index)}
                       onDrop={handleTimelineDrop(index)}
                     >
-                      <span className="pd-timeline__marker" />
+                      <div className="pd-timeline__marker" />
                       <div className="pd-timeline__row">
                         <div className="pd-timeline__body pd-stack pd-stack--sm">
-                          {editMode ? (
-                            <button
-                              type="button"
-                              className="pd-timeline__handle"
-                              draggable
-                              onDragStart={handleTimelineDragStart(index)}
-                              onDragEnd={handleTimelineDragEnd}
-                              aria-label="Reordonner l'etape"
-                              title="Glisser pour reordonner"
-                            >
-                              <GripVertical size={16} />
-                              <span>Glisser pour reordonner</span>
-                            </button>
-                          ) : null}
-                          {editMode ? (
-                            <div className="pd-stack pd-stack--sm">
-                              <div className="pd-grid pd-grid--two pd-gap-sm">
-                                <input
-                                  className="pd-input"
-                                  value={step.etape}
-                                  onChange={(e) => updateTimelineStep(index, { etape: e.target.value })}
-                                  placeholder="Etape"
-                                />
-                                <input
-                                  className="pd-input"
-                                  value={step.lieu || ''}
-                                  onChange={(e) => updateTimelineStep(index, { lieu: e.target.value })}
-                                  placeholder="Lieu"
-                                />
-                              </div>
-                              <div className="pd-grid pd-grid--three pd-gap-sm">
-                                <select
-                                  className="pd-select"
-                                  value={stepMode}
-                                  onChange={(e) => {
-                                    const nextMode = e.target.value as 'date' | 'period';
-                                    updateTimelineStep(
-                                      index,
-                                      nextMode === 'period'
-                                        ? {
-                                            dateType: 'period',
-                                            date: '',
-                                            periodStart: step.periodStart || '',
-                                            periodEnd: step.periodEnd || '',
-                                          }
-                                        : {
-                                            dateType: 'date',
-                                            date: step.date || '',
-                                            periodStart: '',
-                                            periodEnd: '',
-                                          }
-                                    );
-                                  }}
-                                >
-                                  <option value="date">Date</option>
-                                  <option value="period">Periode</option>
-                                </select>
-                                {stepMode === 'period' ? (
-                                  <>
-                                    <input
-                                      className="pd-input"
-                                      value={step.periodStart || ''}
-                                      onChange={(e) =>
-                                        updateTimelineStep(index, { periodStart: e.target.value, dateType: 'period' })
-                                      }
-                                      placeholder="Debut"
-                                    />
-                                    <input
-                                      className="pd-input"
-                                      value={step.periodEnd || ''}
-                                      onChange={(e) =>
-                                        updateTimelineStep(index, { periodEnd: e.target.value, dateType: 'period' })
-                                      }
-                                      placeholder="Fin"
-                                    />
-                                  </>
-                                ) : (
-                                  <input
-                                    className="pd-input"
-                                    value={step.date || ''}
-                                    onChange={(e) => updateTimelineStep(index, { date: e.target.value, dateType: 'date' })}
-                                    placeholder="Date"
-                                  />
-                                )}
-                              </div>
-                            </div>
-                          ) : (
-                            <div>
-                              <p className="pd-text-strong">{step.etape}</p>
-                              <p className="pd-text-xs pd-text-muted">{step.lieu || 'Lieu a preciser'}</p>
-                              <p className="pd-text-xs pd-text-muted">{dateLabel}</p>
-                            </div>
-                          )}
-                          {editMode ? (
-                            <input
-                              className="pd-input"
-                              value={step.preuve?.label || ''}
-                              onChange={(e) => updateTimelineProof(index, { label: e.target.value })}
-                              placeholder="Phrase d'explication (fenetre de disponibilite, savoir-faire...)"
-                            />
-                          ) : (
-                            <p className="pd-text-body">{getStepExplanation(step)}</p>
-                          )}
-                          {editMode ? (
-                            <div className="pd-row pd-row--wrap pd-row--start pd-gap-sm">
+                          <div className="pd-row pd-row--between pd-gap-sm">
+                            {editMode ? (
                               <input
-                                className="pd-input"
-                                value={step.preuve?.url || ''}
-                                onChange={(e) => updateTimelineProof(index, { url: e.target.value })}
-                                placeholder="Lien photo ou document"
+                                className="pd-input pd-input--small"
+                                value={step.etape}
+                                onChange={(e) => updateTimelineStep(index, { etape: e.target.value })}
                               />
+                            ) : (
+                              <p className="pd-text-strong">{step.etape}</p>
+                            )}
+                            {editMode ? (
                               <button
                                 type="button"
-                                onClick={() => handleRemoveTimelineStep(index)}
-                                className="pd-btn pd-btn--ghost pd-btn--warning"
+                                className="pd-timeline__handle"
+                                draggable
+                                onDragStart={handleTimelineDragStart(index)}
+                                onDragEnd={handleTimelineDragEnd}
                               >
-                                Retirer
+                                <GripVertical size={16} />
                               </button>
+                            ) : null}
+                          </div>
+                          <div className="pd-stack pd-stack--xs">
+                            <p className="pd-label">Description</p>
+                            {editMode ? (
+                              <textarea
+                                className="pd-textarea"
+                                value={step.description || ''}
+                                onChange={(e) => updateTimelineStep(index, { description: e.target.value })}
+                                rows={3}
+                              />
+                            ) : (
+                              <p>{step.description || 'A preciser'}</p>
+                            )}
+                          </div>
+                          <div className="pd-stack pd-stack--xs">
+                            <p className="pd-label">Adresse</p>
+                            {editMode ? (
+                              <input
+                                className="pd-input"
+                                value={step.address || ''}
+                                placeholder={step.lieu || ''}
+                                onChange={(e) => updateTimelineStep(index, { address: e.target.value })}
+                              />
+                            ) : (
+                              <p>{formatStepLocationLabel(step)}</p>
+                            )}
+                          </div>
+                          {editMode ? (
+                            <div className="pd-grid pd-grid--two pd-gap-sm">
+                              <div className="pd-stack pd-stack--xs">
+                                <p className="pd-label">Complement</p>
+                                <input
+                                  className="pd-input"
+                                  value={step.addressDetails || ''}
+                                  onChange={(e) => updateTimelineStep(index, { addressDetails: e.target.value })}
+                                />
+                              </div>
+                              <div className="pd-stack pd-stack--xs">
+                                <p className="pd-label">Pays</p>
+                                <select
+                                  className="pd-select"
+                                  value={step.country || 'France'}
+                                  onChange={(e) => updateTimelineStep(index, { country: e.target.value })}
+                                >
+                                  <option value="France">France</option>
+                                </select>
+                              </div>
+                              <div className="pd-stack pd-stack--xs">
+                                <p className="pd-label">Code postal</p>
+                                <input
+                                  className="pd-input"
+                                  value={step.postcode || ''}
+                                  onChange={(e) => updateTimelineStep(index, { postcode: e.target.value })}
+                                />
+                              </div>
+                              <div className="pd-stack pd-stack--xs">
+                                <p className="pd-label">Ville</p>
+                                <input
+                                  className="pd-input"
+                                  value={step.city || ''}
+                                  onChange={(e) => updateTimelineStep(index, { city: e.target.value })}
+                                />
+                              </div>
                             </div>
                           ) : null}
-                        </div>
-                        <div className="pd-timeline__media">
-                          {hasPhoto ? (
-                            <ImageWithFallback
-                              src={step.preuve?.url}
-                              alt={step.etape}
-                              className="pd-media pd-media--image"
-                            />
-                          ) : (
-                            <div className="pd-media pd-media--empty">
-                              <Package size={16} />
-                              <span>Photo optionnelle</span>
+                          {editMode ? (
+                              <div className="pd-row pd-row--wrap pd-row--start pd-gap-sm">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveTimelineStep(index)}
+                                  className="pd-btn pd-btn--ghost pd-btn--warning"
+                                >
+                                  Retirer
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                          {(editMode || stepImageUrl) && (
+                            <div className="pd-timeline__media">
+                              {editMode ? (
+                                <ProductImageUploader
+                                  currentUrl={stepImageUrl}
+                                  alt={stepImageLabel}
+                                  onImageChange={(payload) => handleJourneyImageChange(index, payload)}
+                                  aspectRatio={4 / 3}
+                                />
+                              ) : (
+                                <div className="pd-timeline__media-frame">
+                                  <ImageWithFallback
+                                    src={stepImageUrl}
+                                    alt={stepImageLabel}
+                                    className="pd-timeline__media-image"
+                                  />
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
-                      </div>
                     </div>
                   );
                 })}
@@ -760,23 +2152,53 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             <p className="pd-text-sm pd-text-muted">Aucune etape de tracabilite renseignee.</p>
           )}
         </div>
-
         <div className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
+            <div>
+              <p className="pd-section-title">Carte du parcours</p>
+              <p className="pd-text-xs pd-text-muted">
+                Les points apparaissent des qu'une adresse est renseignee.
+              </p>
+            </div>
+          </div>
+          <div ref={journeyMapContainerRef} className="pd-map" />
+          {journeyMapPoints.length ? null : (
+            <p className="pd-text-xs pd-text-muted">
+              Renseignez une adresse complete pour afficher la carte.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const lotTab = (
+    <div className="pd-tab pd-stack pd-stack--lg">
+      <div className="pd-card pd-stack pd-stack--md">
+        <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
           <div className="pd-row pd-gap-sm">
             <Package className="pd-icon pd-icon--accent" />
-            <p className="pd-section-title">Lots (donnees factuelles)</p>
+            <p className="pd-section-title">Lots</p>
           </div>
-          {display.productions?.length ? (
-            <div className="pd-stack pd-stack--sm">
-              {display.productions.map((lot) => {
-                const badge = lotStatusBadge(lot);
-                return (
-                  <div key={lot.id} className="pd-lot-card pd-stack pd-stack--sm">
-                    <div className="pd-row pd-row--between pd-gap-sm">
-                      <div className="pd-row pd-gap-sm">
-                        <span className={badge.className}>{badge.label}</span>
-                        <p className="pd-text-strong">{lot.nomLot}</p>
-                      </div>
+          <button type="button" onClick={handleAddLot} className="pd-btn pd-btn--ghost pd-btn--dashed">
+            <Plus size={16} />
+            Ajouter un lot
+          </button>
+        </div>
+        {lotList.length ? (
+          <div className="pd-stack pd-stack--sm">
+            {lotList.map((lot) => {
+              const badge = lotStatusBadge(lot);
+              const availabilityStart = lot.periodeDisponibilite?.debut || lot.debut;
+              const availabilityEnd = lot.periodeDisponibilite?.fin || lot.fin;
+              return (
+                <div key={lot.id} className="pd-lot-card pd-stack pd-stack--sm">
+                  <div className="pd-row pd-row--between pd-gap-sm">
+                    <div className="pd-row pd-gap-sm">
+                      <span className={badge.className}>{badge.label}</span>
+                      <p className="pd-text-strong">{lot.nomLot}</p>
+                    </div>
+                    <div className="pd-row pd-row--wrap pd-gap-xs">
                       <button
                         type="button"
                         onClick={() => setSelectedLotId(lot.id)}
@@ -784,140 +2206,576 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                           selectedLotId === lot.id ? 'pd-btn--outline-active' : 'pd-btn--outline'
                         }`}
                       >
-                        {selectedLotId === lot.id ? 'Selectionne pour creer' : 'Selectionner ce lot'}
+                        {selectedLotId === lot.id ? 'Selectionne' : 'Selectionner ce lot'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleEditLot(lot)}
+                        className="pd-btn pd-btn--xs pd-btn--outline"
+                      >
+                        <PenLine size={14} />
+                        Modifier
                       </button>
                     </div>
-                    <div className="pd-grid pd-grid--two pd-gap-sm pd-text-xs pd-text-muted">
-                      <p>
-                        Disponibilite : {lot.periodeDisponibilite?.debut} {'->'} {lot.periodeDisponibilite?.fin}
-                      </p>
-                      <p>
-                        Quantites : {lot.qteRestante ?? '-'} / {lot.qteTotale ?? '-'}
-                      </p>
-                      <p>DLC / DDM : {lot.DLC_DDM || lot.DLC_aReceptionEstimee || '-'}</p>
-                      <p>Lot #{lot.numeroLot || 'A preciser'}</p>
-                    </div>
-                    {lot.commentaire ? <p className="pd-text-body">{lot.commentaire}</p> : null}
-                    {lot.piecesJointes?.length ? (
-                      <div className="pd-row pd-row--wrap pd-gap-xs pd-text-xs">
-                        {lot.piecesJointes.map((piece) => (
-                          <a
-                            key={piece.label}
-                            href={piece.url}
-                            className="pd-link-pill"
-                          >
-                            <ExternalLink size={12} />
-                            {piece.label}
-                          </a>
-                        ))}
-                      </div>
-                    ) : null}
                   </div>
-                );
-              })}
-              <p className="pd-text-xs pd-text-muted">Selectionnez un lot pour le pre-remplissage des commandes.</p>
+                  <div className="pd-grid pd-grid--two pd-gap-sm pd-text-xs pd-text-muted">
+                    <p>
+                      Disponibilite : {availabilityStart || '-'} {'->'} {availabilityEnd || '-'}
+                    </p>
+                    <p>
+                      Quantites : {lot.qteRestante ?? '-'} / {lot.qteTotale ?? '-'}
+                    </p>
+                    <p>DLC / DDM : {lot.DLC_DDM || lot.DLC_aReceptionEstimee || '-'}</p>
+                    <p>Lot #{lot.numeroLot || 'A preciser'}</p>
+                  </div>
+                  {lot.commentaire ? <p className="pd-text-body">{lot.commentaire}</p> : null}
+                </div>
+              );
+            })}
+            <p className="pd-text-xs pd-text-muted">Selectionnez un lot pour renseigner ses dates d'etapes.</p>
+          </div>
+        ) : (
+          <p className="pd-text-sm pd-text-muted">Pas encore de lots publies.</p>
+        )}
+      </div>
+
+      {selectedLot ? (
+        <div className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
+            <div className="pd-row pd-gap-sm">
+              <MapPin className="pd-icon pd-icon--accent" />
+              <p className="pd-section-title">
+                Parcours du lot {selectedLot.nomLot ? `- ${selectedLot.nomLot}` : ''}
+              </p>
+            </div>
+          </div>
+          {lotTimelineDisplay.length ? (
+            <div className="pd-timeline">
+              <div className="pd-timeline__line" />
+              <div className="pd-timeline__list">
+                {lotTimelineDisplay.map((step, index) => {
+                  const periodLabel =
+                    step.periodStart && step.periodEnd
+                      ? `${step.periodStart} -> ${step.periodEnd}`
+                      : step.periodStart || step.periodEnd || 'A preciser';
+                  return (
+                    <div key={step.localId ?? `${step.etape}-${index}`} className="pd-timeline__item">
+                      <div className="pd-timeline__marker" />
+                      <div className="pd-timeline__row">
+                        <div className="pd-timeline__body pd-stack pd-stack--sm">
+                          <div className="pd-row pd-row--between pd-gap-sm">
+                            <p className="pd-text-strong">{step.etape}</p>
+                          </div>
+                          <div className="pd-stack pd-stack--xs">
+                            <p className="pd-label">Adresse</p>
+                            <p>{formatStepLocationLabel(step)}</p>
+                          </div>
+                          <div className="pd-grid pd-grid--two pd-gap-sm">
+                            <div className="pd-stack pd-stack--xs">
+                              <p className="pd-label">Date (debut)</p>
+                              {editMode ? (
+                                <input
+                                  className="pd-input"
+                                  type="date"
+                                  value={step.periodStart || step.date || ''}
+                                  onChange={(e) => handleLotDateChange(step, index, { periodStart: e.target.value })}
+                                />
+                              ) : (
+                                <p>{step.periodStart || step.date || 'A preciser'}</p>
+                              )}
+                            </div>
+                            <div className="pd-stack pd-stack--xs">
+                              <p className="pd-label">Date (fin)</p>
+                              {editMode ? (
+                                <input
+                                  className="pd-input"
+                                  type="date"
+                                  value={step.periodEnd || ''}
+                                  onChange={(e) => handleLotDateChange(step, index, { periodEnd: e.target.value })}
+                                />
+                              ) : (
+                                <p>{step.periodStart && step.periodEnd ? periodLabel : '-'}</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ) : (
-            <p className="pd-text-sm pd-text-muted">Pas encore de lots publies.</p>
+            <p className="pd-text-sm pd-text-muted">
+              Ajoutez des etapes dans Circuit-court pour renseigner les dates.
+            </p>
           )}
         </div>
-      </div>
+      ) : (
+        <p className="pd-text-sm pd-text-muted">Selectionnez un lot pour renseigner les dates d'etapes.</p>
+      )}
+
+      {lotDraft ? (
+        <div className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
+            <div className="pd-row pd-gap-sm">
+              <Package className="pd-icon pd-icon--accent" />
+              <p className="pd-section-title">{lotEditMode === 'edit' ? 'Modifier le lot' : 'Nouveau lot'}</p>
+            </div>
+          </div>
+          <div className="pd-grid pd-grid--two pd-gap-sm">
+            <label className="pd-stack pd-stack--xs">
+              <span className="pd-label">Nom du lot</span>
+              <input
+                className="pd-input"
+                value={lotDraft.nomLot}
+                onChange={(e) => handleLotDraftChange({ nomLot: e.target.value })}
+                placeholder="Ex : Mars S1"
+              />
+            </label>
+            <label className="pd-stack pd-stack--xs">
+              <span className="pd-label">Numero de lot</span>
+              <input
+                className="pd-input"
+                value={lotDraft.numeroLot || ''}
+                onChange={(e) => handleLotDraftChange({ numeroLot: e.target.value })}
+                placeholder="Ex : MB-0325"
+              />
+            </label>
+            <label className="pd-stack pd-stack--xs">
+              <span className="pd-label">Statut</span>
+              <select
+                className="pd-select"
+                value={lotDraft.statut}
+                onChange={(e) => handleLotDraftChange({ statut: e.target.value as ProductionLot['statut'] })}
+              >
+                <option value="a_venir">A venir</option>
+                <option value="en_cours">En cours</option>
+                <option value="epuise">Épuisé</option>
+              </select>
+            </label>
+            <label className="pd-stack pd-stack--xs">
+              <span className="pd-label">DLC / DDM</span>
+              <input
+                type="date"
+                className="pd-input"
+                value={lotDraft.DLC_DDM || ''}
+                onChange={(e) => handleLotDraftChange({ DLC_DDM: e.target.value })}
+              />
+            </label>
+            <label className="pd-stack pd-stack--xs">
+              <span className="pd-label">Début</span>
+              <input
+                type="date"
+                className="pd-input"
+                value={lotDraft.debut || ''}
+                onChange={(e) => handleLotDraftChange({ debut: e.target.value })}
+              />
+            </label>
+            <label className="pd-stack pd-stack--xs">
+              <span className="pd-label">Fin</span>
+              <input
+                type="date"
+                className="pd-input"
+                value={lotDraft.fin || ''}
+                onChange={(e) => handleLotDraftChange({ fin: e.target.value })}
+              />
+            </label>
+            <label className="pd-stack pd-stack--xs">
+              <span className="pd-label">Quantite totale</span>
+              <input
+                type="number"
+                className="pd-input"
+                value={Number.isFinite(lotDraft.qteTotale) ? lotDraft.qteTotale : 0}
+                onChange={(e) => handleLotDraftChange({ qteTotale: Number(e.target.value) })}
+              />
+            </label>
+            <label className="pd-stack pd-stack--xs">
+              <span className="pd-label">Quantité restante</span>
+              <input
+                type="number"
+                className="pd-input"
+                value={Number.isFinite(lotDraft.qteRestante) ? lotDraft.qteRestante : 0}
+                onChange={(e) => handleLotDraftChange({ qteRestante: Number(e.target.value) })}
+              />
+            </label>
+          </div>
+          <label className="pd-stack pd-stack--xs">
+            <span className="pd-label">Commentaire</span>
+            <textarea
+              className="pd-textarea"
+              value={lotDraft.commentaire || ''}
+              onChange={(e) => handleLotDraftChange({ commentaire: e.target.value })}
+              rows={3}
+            />
+          </label>
+          <div className="pd-row pd-row--wrap pd-gap-sm">
+            <button type="button" onClick={handleSaveLot} className="pd-btn pd-btn--primary pd-btn--pill">
+              {lotEditMode === 'edit' ? 'Mettre a jour le lot' : 'Enregistrer le lot'}
+            </button>
+            <button type="button" onClick={handleCancelLotEdit} className="pd-btn pd-btn--outline pd-btn--pill">
+              Annuler
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
+
 
   const qualityTab = (
     <div className="pd-tab pd-stack pd-stack--lg">
-      <div className="pd-grid pd-grid--wide pd-gap-lg">
-        <div className="pd-card pd-stack pd-stack--md">
-          <div className="pd-row pd-gap-sm">
-            <ShieldCheck className="pd-icon pd-icon--accent" />
-            <p className="pd-section-title">Labels & caractéristiques du produit</p>
-          </div>
-          {allBadges.length ? (
-            <div className="pd-grid pd-grid--two pd-gap-sm">
-              {allBadges.map((badge) => (
-                <div key={badge} className="pd-card pd-card--subtle pd-stack pd-stack--xs">
-                  <p className="pd-text-strong">{badge}</p>
-                  <p className="pd-text-xs pd-text-muted">{getLabelDescription(badge)}</p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="pd-text-sm pd-text-muted">Aucun label renseigné pour le moment.</p>
-          )}
+      <div className="pd-card pd-stack pd-stack--md">
+        <div className="pd-row pd-gap-sm">
+          <ShieldCheck className="pd-icon pd-icon--accent" />
+          <p className="pd-section-title">Labels & caracteristiques du produit</p>
         </div>
-
-        <div className="pd-card pd-stack pd-stack--md">
-          <div className="pd-row pd-gap-sm">
-            <Package className="pd-icon pd-icon--accent" />
-            <p className="pd-section-title">Exploitation</p>
-          </div>
-          {display.productionConditions ? (
-            <div className="pd-grid pd-grid--two pd-gap-sm">
-              {display.productionConditions.modeProduction ? (
-                <div className="pd-info-card pd-stack pd-stack--xs">
-                  <p className="pd-label">Mode de production</p>
-                  <p>{display.productionConditions.modeProduction}</p>
-                </div>
-              ) : null}
-              {display.productionConditions.intrantsPesticides ? (
-                <div className="pd-info-card pd-stack pd-stack--xs">
-                  <p className="pd-label">Intrants / pesticides</p>
-                  <p>
-                    {display.productionConditions.intrantsPesticides.utilise ? 'Utilisation declaree' : 'Non utilise'}
-                  </p>
-                  <p className="pd-text-xs pd-text-muted">{display.productionConditions.intrantsPesticides.details}</p>
-                </div>
-              ) : null}
-              {display.productionConditions.bienEtreAnimal ? (
-                <div className="pd-info-card pd-stack pd-stack--xs">
-                  <p className="pd-label">Bien-être animal</p>
-                  <p>{display.productionConditions.bienEtreAnimal}</p>
-                </div>
-              ) : null}
-              {display.productionConditions.environnement ? (
-                <div className="pd-info-card pd-stack pd-stack--xs">
-                  <p className="pd-label">Environnement</p>
-                  <p>{display.productionConditions.environnement}</p>
-                </div>
-              ) : null}
-              {display.productionConditions.social ? (
-                <div className="pd-info-card pd-stack pd-stack--xs">
-                  <p className="pd-label">Social</p>
-                  <p>{display.productionConditions.social}</p>
-                </div>
-              ) : null}
+        {editMode ? (
+          <div className="pd-stack pd-stack--lg">
+            <div className="pd-grid pd-grid--two pd-gap-md">
+              <div className="pd-stack pd-stack--xs">
+                <p className="pd-label">Labels officiels</p>
+                {draftOfficialBadgeDetails.length ? (
+                  <div className="pd-stack pd-stack--sm">
+                    {draftOfficialBadgeDetails.map((badge, idx) => (
+                      <div
+                        key={`official-${idx}`}
+                        className="pd-card pd-card--subtle pd-stack pd-stack--xs"
+                      >
+                        <div className="pd-grid pd-grid--three pd-gap-sm">
+                          <input
+                            className="pd-input"
+                            value={badge.label}
+                            onChange={(e) =>
+                              handleBadgeDetailChange('officialBadgeDetails', idx, 'label', e.target.value)
+                            }
+                            placeholder="Nom du label"
+                          />
+                          <input
+                            className="pd-input"
+                            value={badge.description ?? ''}
+                            onChange={(e) =>
+                              handleBadgeDetailChange(
+                                'officialBadgeDetails',
+                                idx,
+                                'description',
+                                e.target.value
+                              )
+                            }
+                            placeholder="Description"
+                          />
+                          <input
+                            type="number"
+                            className="pd-input"
+                            value={badge.obtentionYear ?? ''}
+                            onChange={(e) =>
+                              handleBadgeDetailChange(
+                                'officialBadgeDetails',
+                                idx,
+                                'obtentionYear',
+                                e.target.value
+                              )
+                            }
+                            placeholder="Annee d'obtention"
+                            min="1900"
+                            max="2100"
+                            step="1"
+                          />
+                        </div>
+                        <div className="pd-row pd-row--wrap pd-gap-sm">
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveBadgeDetail('officialBadgeDetails', idx)}
+                            className="pd-btn pd-btn--ghost pd-btn--warning"
+                          >
+                            Retirer
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="pd-text-sm pd-text-muted">Aucun label officiel renseigne.</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleAddBadgeDetail('officialBadgeDetails')}
+                  className="pd-btn pd-btn--ghost pd-btn--dashed"
+                >
+                  <Plus size={16} />
+                  Ajouter un label officiel
+                </button>
+              </div>
+              <div className="pd-stack pd-stack--xs">
+                <p className="pd-label">Labels plateforme</p>
+                {draftPlatformBadgeDetails.length ? (
+                  <div className="pd-stack pd-stack--sm">
+                    {draftPlatformBadgeDetails.map((badge, idx) => (
+                      <div
+                        key={`platform-${idx}`}
+                        className="pd-card pd-card--subtle pd-stack pd-stack--xs"
+                      >
+                        <div className="pd-grid pd-grid--three pd-gap-sm">
+                          <input
+                            className="pd-input"
+                            value={badge.label}
+                            onChange={(e) =>
+                              handleBadgeDetailChange('platformBadgeDetails', idx, 'label', e.target.value)
+                            }
+                            placeholder="Nom du label"
+                          />
+                          <input
+                            className="pd-input"
+                            value={badge.description ?? ''}
+                            onChange={(e) =>
+                              handleBadgeDetailChange(
+                                'platformBadgeDetails',
+                                idx,
+                                'description',
+                                e.target.value
+                              )
+                            }
+                            placeholder="Description"
+                          />
+                          <input
+                            type="number"
+                            className="pd-input"
+                            value={badge.obtentionYear ?? ''}
+                            onChange={(e) =>
+                              handleBadgeDetailChange(
+                                'platformBadgeDetails',
+                                idx,
+                                'obtentionYear',
+                                e.target.value
+                              )
+                            }
+                            placeholder="Annee d'obtention"
+                            min="1900"
+                            max="2100"
+                            step="1"
+                          />
+                        </div>
+                        <div className="pd-row pd-row--wrap pd-gap-sm">
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveBadgeDetail('platformBadgeDetails', idx)}
+                            className="pd-btn pd-btn--ghost pd-btn--warning"
+                          >
+                            Retirer
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="pd-text-sm pd-text-muted">Aucun label plateforme renseigne.</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleAddBadgeDetail('platformBadgeDetails')}
+                  className="pd-btn pd-btn--ghost pd-btn--dashed"
+                >
+                  <Plus size={16} />
+                  Ajouter un label plateforme
+                </button>
+              </div>
             </div>
-          ) : (
-            <p className="pd-text-sm pd-text-muted">Le producteur n'a pas encore renseigné son cahier des charges.</p>
-          )}
-        </div>
+            <div className="pd-divider" />
+            <div className="pd-stack pd-stack--xs">
+              <p className="pd-label">Labels de l'exploitation</p>
+              <p className="pd-text-xs pd-text-muted">
+                Les labels de l'exploitation proviennent du profil producteur.
+              </p>
+              {mergedProducerProfileLabels.length ? (
+                <div className="pd-grid pd-grid--two pd-gap-sm">
+                  {mergedProducerProfileLabels.map((badge) => (
+                    <div key={badge.label} className="pd-card pd-card--subtle pd-stack pd-stack--xs">
+                      <p className="pd-text-strong">{badge.label}</p>
+                      {badge.description ? (
+                        <p className="pd-text-xs pd-text-muted">{badge.description}</p>
+                      ) : (
+                        <p className="pd-text-xs pd-text-muted">Aucune description renseignee.</p>
+                      )}
+                      {badge.obtentionYear ? (
+                        <p className="pd-text-xs pd-text-muted">Obtenu en {badge.obtentionYear}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="pd-text-sm pd-text-muted">Aucun label d'exploitation pour le moment.</p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="pd-grid pd-grid--two pd-gap-md">
+            <div className="pd-stack pd-stack--xs">
+              <p className="pd-label">Labels du produit</p>
+              {productBadgeDetails.length ? (
+                <div className="pd-grid pd-grid--two pd-gap-sm">
+                  {productBadgeDetails.map((badge) => {
+                    const description = badge.description?.trim() || getLabelDescription(badge.label);
+                    return (
+                      <div key={badge.label} className="pd-card pd-card--subtle pd-stack pd-stack--xs">
+                        <p className="pd-text-strong">{badge.label}</p>
+                        <p className="pd-text-xs pd-text-muted">{description}</p>
+                        {badge.obtentionYear ? (
+                          <p className="pd-text-xs pd-text-muted">Obtenu en {badge.obtentionYear}</p>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="pd-text-sm pd-text-muted">Aucun label produit renseigne.</p>
+              )}
+            </div>
+            <div className="pd-stack pd-stack--xs">
+              <p className="pd-label">Labels de l'exploitation</p>
+              {mergedProducerProfileLabels.length ? (
+                <div className="pd-grid pd-grid--two pd-gap-sm">
+                  {mergedProducerProfileLabels.map((badge) => (
+                    <div key={badge.label} className="pd-card pd-card--subtle pd-stack pd-stack--xs">
+                      <p className="pd-text-strong">{badge.label}</p>
+                      {badge.description ? (
+                        <p className="pd-text-xs pd-text-muted">{badge.description}</p>
+                      ) : (
+                        <p className="pd-text-xs pd-text-muted">Aucune description renseignee.</p>
+                      )}
+                      {badge.obtentionYear ? (
+                        <p className="pd-text-xs pd-text-muted">Obtenu en {badge.obtentionYear}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="pd-text-sm pd-text-muted">Aucun label d'exploitation pour le moment.</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
+
 
   const repartitionTab = (
     <div className="pd-tab pd-stack pd-stack--md">
       <div className="pd-card pd-stack pd-stack--md">
         <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
           <div>
-            <p className="pd-section-title">Repartition de la valeur</p>
             <p className="pd-text-xs pd-text-muted">
-              {detail.repartitionValeur?.postes?.length
-                ? `Lecture en ${detail.repartitionValeur.uniteReference} - ${
-                    detail.repartitionValeur.mode === 'detaille' ? 'Detaille' : 'Estimatif'
+              {display.repartitionValeur?.postes?.length
+                ? `Pour chaque ${display.repartitionValeur.uniteReference} - ${
+                    display.repartitionValeur.mode === 'detaille' ? 'Montants exacts' : 'Montants estimatifs'
                   }`
                 : "Le producteur n'a pas encore renseigné la repartition"}
             </p>
           </div>
-          {detail.repartitionValeur?.totalReference ? (
-            <span className="pd-chip pd-chip--highlight">
-              Total reference {detail.repartitionValeur.totalReference} {detail.repartitionValeur.uniteReference}
-            </span>
-          ) : null}
         </div>
-        {localPosts.length === 0 ? (
-          <p className="pd-text-sm pd-text-muted">Le producteur n'a pas encore renseigné la repartition.</p>
+        {editMode ? (
+          <div className="pd-stack pd-stack--md">
+            <div className="pd-row pd-row--wrap pd-gap-sm">
+              <label className="pd-stack pd-stack--xs">
+                <span className="pd-label">Mode</span>
+                <select
+                  className="pd-select"
+                  value={draft.repartitionValeur?.mode ?? 'detaille'}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      repartitionValeur: {
+                        ...(prev.repartitionValeur ?? {
+                          mode: 'detaille',
+                          uniteReference: localMeasurement === 'kg' ? 'kg' : 'piece',
+                          postes: [],
+                        }),
+                        mode: e.target.value as 'detaille' | 'estimatif',
+                      },
+                    }))
+                  }
+                >
+                  <option value="detaille">Montants exacts</option>
+                  <option value="estimatif">Montants estimatifs</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={handleAddPost}
+                className="pd-btn pd-btn--ghost pd-btn--dashed"
+              >
+                <Plus size={16} />
+                Ajouter un poste
+              </button>
+            </div>
+            {localPosts.length === 0 ? (
+              <p className="pd-text-sm pd-text-muted">Ajoutez des postes pour renseigner la répartition.</p>
+            ) : (
+              <div className="pd-table-wrap">
+                <table className="pd-table">
+                  <thead className="pd-table__head">
+                    <tr>
+                      <th className="pd-table__cell">Partie prenante</th>
+                      <th className="pd-table__cell">Poste</th>
+                      <th className="pd-table__cell">Valeur</th>
+                      <th className="pd-table__cell">Commentaire</th>
+                      <th className="pd-table__cell" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {localPosts.map((post, idx) => (
+                      <tr key={`post-${idx}`} className="pd-table__row">
+                        <td className="pd-table__cell">
+                          <input
+                            className="pd-input"
+                            value={post.partiePrenante || ''}
+                            onChange={(e) => handlePostChange(idx, 'partiePrenante', e.target.value)}
+                            placeholder="Ex : Producteur"
+                          />
+                        </td>
+                        <td className="pd-table__cell">
+                          <input
+                            className="pd-input"
+                            value={post.nom}
+                            onChange={(e) => handlePostChange(idx, 'nom', e.target.value)}
+                            placeholder={`Poste ${idx + 1}`}
+                          />
+                        </td>
+                        <td className="pd-table__cell">
+                          <input
+                            type="number"
+                            step="0.01"
+                            className="pd-input"
+                            value={Number.isFinite(post.valeur) ? post.valeur : 0}
+                            onChange={(e) => handlePostChange(idx, 'valeur', e.target.value)}
+                          />
+                        </td>
+                        <td className="pd-table__cell">
+                          <input
+                            className="pd-input"
+                            value={post.details || ''}
+                            onChange={(e) => handlePostChange(idx, 'details', e.target.value)}
+                            placeholder="Optionnel"
+                          />
+                        </td>
+                        <td className="pd-table__cell">
+                          <button
+                            type="button"
+                            onClick={() => handleRemovePost(idx)}
+                            className="pd-btn pd-btn--ghost pd-btn--warning"
+                          >
+                            Retirer
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : localPosts.length === 0 ? (
+          <p className="pd-text-sm pd-text-muted">Le producteur n'a pas encore renseigné la répartition.</p>
         ) : (
           <div className="pd-stack pd-stack--md">
             <ValuePieChart
@@ -931,91 +2789,30 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               <table className="pd-table">
                 <thead className="pd-table__head">
                   <tr>
+                    <th className="pd-table__cell">Partie prenante</th>
                     <th className="pd-table__cell">Poste</th>
-                    <th className="pd-table__cell">Cout (EUR)</th>
+                    <th className="pd-table__cell">Coût (€)</th>
                     <th className="pd-table__cell">Details</th>
-                    {editMode ? <th className="pd-table__cell">Actions</th> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {localPosts.map((post, idx) => (
                     <tr key={`${post.nom}-${idx}`} className="pd-table__row">
                       <td className="pd-table__cell">
-                        {editMode ? (
-                          <input
-                            className="pd-input"
-                            value={post.nom}
-                            onChange={(e) => handlePostChange(idx, 'nom', e.target.value)}
-                          />
-                        ) : (
-                          <span className="pd-text-strong">{post.nom}</span>
-                        )}
+                        <span className="pd-text-body">{post.partiePrenante || '-'}</span>
                       </td>
                       <td className="pd-table__cell">
-                        {editMode ? (
-                          <div className="pd-row pd-gap-sm">
-                            <input
-                              type="number"
-                              min={0}
-                              className="pd-input pd-input--small"
-                              value={post.valeur}
-                              onChange={(e) => handlePostChange(idx, 'valeur', e.target.value)}
-                            />
-                            <span className="pd-text-xs pd-text-muted">EUR</span>
-                          </div>
-                        ) : (
-                          <span className="pd-text-body">{formatValue(post)}</span>
-                        )}
+                        <span className="pd-text-strong">{post.nom || `Poste ${idx + 1}`}</span>
                       </td>
-                      <td className="pd-table__cell pd-text-muted">
-                        {editMode ? (
-                          <input
-                            className="pd-input"
-                            value={post.details || ''}
-                            onChange={(e) => handlePostChange(idx, 'details', e.target.value)}
-                            placeholder="Ex : main d'oeuvre, matiere premiere, logistique..."
-                          />
-                        ) : (
-                          post.details || '-'
-                        )}
+                      <td className="pd-table__cell">
+                        <span className="pd-text-body">{formatValue(post)}</span>
                       </td>
-                      {editMode ? (
-                        <td className="pd-table__cell">
-                          <button
-                            type="button"
-                            onClick={() => setLocalPosts((prev) => prev.filter((_, idy) => idy !== idx))}
-                            className="pd-link-btn"
-                          >
-                            Supprimer
-                          </button>
-                        </td>
-                      ) : null}
+                      <td className="pd-table__cell">{post.details || '-'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            {hasGap ? (
-              <div className="pd-alert pd-alert--warn">
-                <Info size={14} />
-                <span>
-                  Ecart detecte : total {totalPosts.toFixed(2)} vs attendu {expectedTotal}. Ajustez vos postes.
-                </span>
-              </div>
-            ) : null}
-            {detail.repartitionValeur?.notePedagogique ? (
-              <p className="pd-text-xs pd-text-muted">{detail.repartitionValeur.notePedagogique}</p>
-            ) : null}
-            {editMode ? (
-              <button
-                type="button"
-                onClick={handleAddPost}
-                className="pd-btn pd-btn--ghost pd-btn--dashed"
-              >
-                <Plus size={16} />
-                Ajouter un poste
-              </button>
-            ) : null}
           </div>
         )}
       </div>
@@ -1024,87 +2821,44 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   const consumptionTab = (
     <div className="pd-tab pd-stack pd-stack--lg">
-      <div className="pd-grid pd-grid--wide pd-gap-lg">
-        <div className="pd-card pd-stack pd-stack--md">
-          <div className="pd-row pd-gap-sm">
-            <MapPin className="pd-icon pd-icon--accent" />
-            <p className="pd-section-title">Répartition des lieux d'achats</p>
-          </div>
-          <div className="pd-map">
-            <div className="pd-map__label">
-              <MapPin size={16} />
-              <span>Carte des achats</span>
-            </div>
-          </div>
-          <div className="pd-row pd-row--wrap pd-gap-sm">
-            <div className="pd-stat-card">
-              <p className="pd-text-xs pd-text-muted">Commandes actives</p>
-              <p className="pd-text-strong">{ordersWithProduct.length}</p>
-            </div>
-            <div className="pd-stat-card">
-              <p className="pd-text-xs pd-text-muted">Participants</p>
-              <p className="pd-text-strong">{totalParticipants}</p>
-            </div>
-            <div className="pd-stat-card">
-              <p className="pd-text-xs pd-text-muted">Kg mutualises</p>
-              <p className="pd-text-strong">{totalOrderedWeight ? totalOrderedWeight.toFixed(1) : '-'}</p>
-            </div>
-          </div>
-          {locationStats.length ? (
-            <div className="pd-stack pd-stack--xs">
-              <p className="pd-label">Villes principales</p>
-              <div className="pd-row pd-row--wrap pd-gap-xs">
-                {locationStats.map((item) => (
-                  <span key={item.label} className="pd-chip">
-                    {item.label} ({item.count})
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <p className="pd-text-sm pd-text-muted">Pas encore de commandes localisees.</p>
-          )}
+      <div className="pd-card pd-stack pd-stack--md">
+        <div className="pd-row pd-gap-sm">
+          <Users className="pd-icon pd-icon--accent" />
+          <p className="pd-section-title">Indicateurs par lot</p>
         </div>
-
-        <div className="pd-card pd-stack pd-stack--md">
-          <div className="pd-row pd-gap-sm">
-            <Users className="pd-icon pd-icon--accent" />
-            <p className="pd-section-title">Indicateurs par lot</p>
-          </div>
-          {display.productions?.length ? (
-            <div className="pd-stack pd-stack--sm">
-              {display.productions.map((lot) => {
-                const total = lot.qteTotale ?? 0;
-                const remaining = lot.qteRestante ?? 0;
-                const mutualised = total ? Math.max(total - remaining, 0) : 0;
-                return (
-                  <div key={`cons-${lot.id}`} className="pd-lot-metrics pd-stack pd-stack--sm">
-                    <div className="pd-row pd-row--between pd-text-sm">
-                      <span className="pd-text-strong">{lot.nomLot}</span>
-                      <span className="pd-text-xs pd-text-muted">{lot.statut.replace('_', ' ')}</span>
+        {lotList.length ? (
+          <div className="pd-stack pd-stack--sm">
+            {lotList.map((lot) => {
+              const total = lot.qteTotale ?? 0;
+              const remaining = lot.qteRestante ?? 0;
+              const mutualised = total ? Math.max(total - remaining, 0) : 0;
+              return (
+                <div key={`cons-${lot.id}`} className="pd-lot-metrics pd-stack pd-stack--sm">
+                  <div className="pd-row pd-row--between pd-text-sm">
+                    <span className="pd-text-strong">{lot.nomLot}</span>
+                    <span className="pd-text-xs pd-text-muted">{lot.statut.replace('_', ' ')}</span>
+                  </div>
+                  <div className="pd-grid pd-grid--three pd-gap-sm pd-text-xs pd-text-muted">
+                    <div>
+                      <p className="pd-label pd-label--tiny">Kg mutualises</p>
+                      <p className="pd-text-body">{mutualised || '-'}</p>
                     </div>
-                    <div className="pd-grid pd-grid--three pd-gap-sm pd-text-xs pd-text-muted">
-                      <div>
-                        <p className="pd-label pd-label--tiny">Kg mutualises</p>
-                        <p className="pd-text-body">{mutualised || '-'}</p>
-                      </div>
-                      <div>
-                        <p className="pd-label pd-label--tiny">Participants</p>
-                        <p className="pd-text-body">{totalParticipants || '-'}</p>
-                      </div>
-                      <div>
-                        <p className="pd-label pd-label--tiny">Commandes</p>
-                        <p className="pd-text-body">{ordersWithProduct.length || '-'}</p>
-                      </div>
+                    <div>
+                      <p className="pd-label pd-label--tiny">Participants</p>
+                      <p className="pd-text-body">{totalParticipants || '-'}</p>
+                    </div>
+                    <div>
+                      <p className="pd-label pd-label--tiny">Commandes</p>
+                      <p className="pd-text-body">{ordersWithProduct.length || '-'}</p>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="pd-text-sm pd-text-muted">Pas encore de lots pour afficher les indicateurs.</p>
-          )}
-        </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="pd-text-sm pd-text-muted">Pas encore de lots pour afficher les indicateurs.</p>
+        )}
       </div>
 
       <div className="pd-grid pd-grid--two pd-gap-lg">
@@ -1134,7 +2888,6 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             <p className="pd-text-sm pd-text-muted">Pas encore d'avis.</p>
           )}
         </div>
-
         <div className="pd-card pd-stack pd-stack--md">
           <p className="pd-section-title">Questions / FAQ</p>
           <div className="pd-stack pd-stack--xs">
@@ -1146,9 +2899,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               className="pd-textarea"
               placeholder="Comment ca marche, conditions de retrait..."
             />
-            <button className="pd-btn pd-btn--primary">
-              Publier la question
-            </button>
+            <button className="pd-btn pd-btn--primary">Publier la question</button>
           </div>
           {detail.questions?.listeQnA?.length ? (
             <div className="pd-stack pd-stack--sm">
@@ -1166,125 +2917,150 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     </div>
   );
 
+
   const transparencyTab = (
     <div className="pd-tab pd-stack pd-stack--lg">
-      <div className="pd-grid pd-grid--two pd-gap-lg">
-      
-        <div className="pd-card pd-stack pd-stack--md">
-          <p className="pd-section-title">Conservation & dates</p>
-          <div className="pd-stack pd-stack--sm">
-            <div className="pd-info-card pd-stack pd-stack--xs">
-              <p className="pd-label">DLC / DDM</p>
+      <div className="pd-card pd-stack pd-stack--md">
+        <p className="pd-section-title">Conservation & dates</p>
+        <div className="pd-stack pd-stack--sm">
+          <div className="pd-info-card pd-stack pd-stack--xs">
+            <p className="pd-label">DLC / DDM</p>
+            {editMode ? (
+              <input
+                className="pd-input"
+                value={draft.dlcEstimee || ''}
+                onChange={(e) => setDraft((prev) => ({ ...prev, dlcEstimee: e.target.value }))}
+                placeholder="DLC estimee"
+              />
+            ) : (
+              <p className="pd-text-body">DLC estimee : {display.dlcEstimee || '-'}</p>
+            )}
+            {selectedLot?.DLC_DDM ? (
+              <p className="pd-text-xs pd-text-muted">Lot selectionne : {selectedLot.DLC_DDM}</p>
+            ) : null}
+          </div>
+          <div className="pd-info-card pd-stack pd-stack--xs">
+            <p className="pd-label">Conservation</p>
+            <div className="pd-row pd-gap-sm pd-text-sm">
+              <Thermometer size={16} />
               {editMode ? (
-                <input
-                  className="pd-input"
-                  value={draft.dlcEstimee || ''}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, dlcEstimee: e.target.value }))}
-                  placeholder="DLC estimee"
-                />
+                <select
+                  className="pd-select"
+                  value={draft.conservationMode || ''}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, conservationMode: e.target.value as any }))}
+                >
+                  <option value="">A preciser</option>
+                  <option value="frais">Frais</option>
+                  <option value="ambiant">Ambiant</option>
+                  <option value="congele">Congele</option>
+                </select>
               ) : (
-                <p className="pd-text-body">DLC estimée : {display.dlcEstimee || '-'}</p>
+                <span>{display.conservationMode ? `${display.conservationMode} (0-4C si frais)` : 'A preciser'}</span>
               )}
-              {selectedLot?.DLC_DDM ? (
-                <p className="pd-text-xs pd-text-muted">Lot selectionné : {selectedLot.DLC_DDM}</p>
-              ) : null}
             </div>
-            <div className="pd-info-card pd-stack pd-stack--xs">
-              <p className="pd-label">Conservation</p>
-              <div className="pd-row pd-gap-sm pd-text-sm">
-                <Thermometer size={16} />
-                {editMode ? (
-                  <select
-                    className="pd-select"
-                    value={draft.conservationMode || ''}
-                    onChange={(e) => setDraft((prev) => ({ ...prev, conservationMode: e.target.value as any }))}
-                  >
-                    <option value="">A preciser</option>
-                    <option value="frais">Frais</option>
-                    <option value="ambiant">Ambiant</option>
-                    <option value="congele">Congele</option>
-                  </select>
-                ) : (
-                  <span>{display.conservationMode ? `${display.conservationMode} (0-4C si frais)` : 'A preciser'}</span>
-                )}
-              </div>
-              {display.compositionEtiquette?.conservationDetaillee ? (
-                <p className="pd-text-xs pd-text-muted">{display.compositionEtiquette.conservationDetaillee}</p>
-              ) : null}
-            </div>
-            <div className="pd-info-card pd-stack pd-stack--xs">
-              <p className="pd-label">Apres ouverture</p>
-              {editMode ? (
-                <textarea
-                  className="pd-textarea"
-                  value={draft.compositionEtiquette?.conseilsUtilisation || ''}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      compositionEtiquette: { ...(prev.compositionEtiquette ?? {}), conseilsUtilisation: e.target.value },
-                    }))
-                  }
-                  placeholder="Ex : consommer sous 48h apres ouverture."
-                />
-              ) : (
-                <p className="pd-text-body">
-                  {display.compositionEtiquette?.conseilsUtilisation || 'Consommer sous 48h apres ouverture.'}
-                </p>
-              )}
-              <p className="pd-text-xs pd-text-muted">
-                Congelation :{' '}
-                {display.conservationMode === 'congele' ||
-                (display.compositionEtiquette?.conservationDetaillee || '').toLowerCase().includes('congel')
-                  ? 'oui'
-                  : 'non'}
+            {display.compositionEtiquette?.conservationDetaillee ? (
+              <p className="pd-text-xs pd-text-muted">{display.compositionEtiquette.conservationDetaillee}</p>
+            ) : null}
+          </div>
+          <div className="pd-info-card pd-stack pd-stack--xs">
+            <p className="pd-label">Apres ouverture</p>
+            {editMode ? (
+              <textarea
+                className="pd-textarea"
+                value={draft.compositionEtiquette?.conseilsUtilisation || ''}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    compositionEtiquette: {
+                      ...(prev.compositionEtiquette ?? {}),
+                      conseilsUtilisation: e.target.value,
+                    },
+                  }))
+                }
+                placeholder="Conseils de consommation apres ouverture"
+                rows={3}
+              />
+            ) : (
+              <p className="pd-text-body">
+                {display.compositionEtiquette?.conseilsUtilisation || 'Consommer sous 48h apres ouverture.'}
               </p>
-            </div>
+            )}
+            <p className="pd-text-xs pd-text-muted">
+              Congelation :{' '}
+              {display.conservationMode === 'congele' ||
+              (display.compositionEtiquette?.conservationDetaillee || '').toLowerCase().includes('congel')
+                ? 'oui'
+                : 'non'}
+            </p>
           </div>
         </div>
-      </div>
-
-      <div className="pd-grid pd-grid--two pd-gap-lg">
-        <div className="pd-card pd-stack pd-stack--md">
-          <p className="pd-section-title">Ingrédients & allérgenes</p>
-          <div className="pd-stack pd-stack--sm">
-            <div className="pd-stack pd-stack--xs">
-              <p className="pd-label">Dénomination de vente</p>
+        <div className="pd-grid pd-grid--two pd-gap-lg">
+          <div className="pd-card pd-stack pd-stack--md">
+            <p className="pd-section-title">Ingredients & allergenes</p>
+            <div className="pd-stack pd-stack--sm">
               {editMode ? (
-                <input
-                  className="pd-input"
-                  value={draft.compositionEtiquette?.denominationVente || ''}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      compositionEtiquette: { ...(prev.compositionEtiquette ?? {}), denominationVente: e.target.value },
-                    }))
-                  }
-                />
-              ) : (
-                <p>{display.compositionEtiquette?.denominationVente || 'A preciser'}</p>
-              )}
-            </div>
-            <div className="pd-stack pd-stack--xs">
-              <p className="pd-label">Ingredients</p>
-              {editMode ? (
-                <textarea
-                  className="pd-textarea"
-                  value={(draft.compositionEtiquette?.ingredients || []).map((item) => item.nom).join(', ')}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      compositionEtiquette: {
-                        ...(prev.compositionEtiquette ?? {}),
-                        ingredients: e.target.value
-                          .split(',')
-                          .map((value) => value.trim())
-                          .filter(Boolean)
-                          .map((value) => ({ nom: value })),
-                      },
-                    }))
-                  }
-                  placeholder="Ex : lait cru, ferments, sel..."
-                />
+                <div className="pd-stack pd-stack--sm">
+                  <div className="pd-table-wrap">
+                    <table className="pd-table">
+                      <thead className="pd-table__head">
+                        <tr>
+                          <th className="pd-table__cell">Ingredient</th>
+                          <th className="pd-table__cell">Allergene</th>
+                          <th className="pd-table__cell">Type</th>
+                          <th className="pd-table__cell" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(draft.compositionEtiquette?.ingredients ?? []).map((ingredient, idx) => (
+                          <tr key={`ingredient-${idx}`} className="pd-table__row">
+                            <td className="pd-table__cell">
+                              <input
+                                className="pd-input"
+                                value={ingredient.nom}
+                                onChange={(e) => handleIngredientChange(idx, { nom: e.target.value })}
+                                placeholder="Ex : lait cru"
+                              />
+                            </td>
+                            <td className="pd-table__cell">
+                              <input
+                                type="checkbox"
+                                className="pd-checkbox"
+                                checked={Boolean(ingredient.isAllergen)}
+                                onChange={(e) => handleIngredientChange(idx, { isAllergen: e.target.checked })}
+                              />
+                            </td>
+                            <td className="pd-table__cell">
+                              <input
+                                className="pd-input"
+                                value={ingredient.allergenType || ''}
+                                onChange={(e) => handleIngredientChange(idx, { allergenType: e.target.value })}
+                                placeholder="Type d'allergene"
+                                disabled={!ingredient.isAllergen}
+                              />
+                            </td>
+                            <td className="pd-table__cell">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveIngredient(idx)}
+                                className="pd-btn pd-btn--ghost pd-btn--warning"
+                              >
+                                Retirer
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddIngredient}
+                    className="pd-btn pd-btn--ghost pd-btn--dashed"
+                  >
+                    <Plus size={16} />
+                    Ajouter un ingredient
+                  </button>
+                </div>
               ) : display.compositionEtiquette?.ingredients?.length ? (
                 <div className="pd-row pd-row--wrap pd-gap-xs">
                   {display.compositionEtiquette.ingredients.map((ingredient) => (
@@ -1296,84 +3072,88 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               ) : (
                 <p className="pd-text-sm pd-text-muted">Ingredients a preciser.</p>
               )}
-            </div>
-            <div className="pd-stack pd-stack--xs">
-              <p className="pd-label">Allergenes</p>
-              {editMode ? (
-                <input
-                  className="pd-input pd-input--warn"
-                  value={(draft.compositionEtiquette?.allergenes || []).join(', ')}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      compositionEtiquette: {
-                        ...(prev.compositionEtiquette ?? {}),
-                        allergenes: e.target.value
-                          .split(',')
-                          .map((value) => value.trim())
-                          .filter(Boolean),
-                      },
-                    }))
-                  }
-                />
-              ) : display.compositionEtiquette?.allergenes?.length ? (
-                <div className="pd-row pd-row--wrap pd-gap-xs">
-                  {display.compositionEtiquette.allergenes.map((allergene) => (
-                    <span key={allergene} className="pd-chip pd-chip--warn">
-                      {allergene}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="pd-text-sm pd-text-muted">Aucun allergene mentionne.</p>
-              )}
+              <div className="pd-stack pd-stack--xs">
+                <p className="pd-label">Allergenes</p>
+                {displayAllergens.length ? (
+                  <div className="pd-row pd-row--wrap pd-gap-xs">
+                    {displayAllergens.map((allergene) => (
+                      <span key={allergene} className="pd-chip pd-chip--warn">
+                        {allergene}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="pd-text-sm pd-text-muted">Aucun allergene mentionne.</p>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-
-        <div className="pd-card pd-stack pd-stack--md">
-          <p className="pd-section-title">Nutrition & composition</p>
-          <div className="pd-stack pd-stack--sm">
-            <div className="pd-stack pd-stack--xs">
-              <p className="pd-label">Additifs / aromes</p>
+          <div className="pd-card pd-stack pd-stack--md">
+            <p className="pd-section-title">Nutrition & composition</p>
+            <div className="pd-stack pd-stack--sm">
+              <div className="pd-stack pd-stack--xs">
+                <p className="pd-label">Additifs / aromes</p>
+                {editMode ? (
+                  <input
+                    className="pd-input"
+                    value={(draft.compositionEtiquette?.additifs || []).join(', ')}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        compositionEtiquette: {
+                          ...(prev.compositionEtiquette ?? {}),
+                          additifs: e.target.value
+                            .split(',')
+                            .map((value) => value.trim())
+                            .filter(Boolean),
+                        },
+                      }))
+                    }
+                    placeholder="Ex : sans additif ni arome"
+                  />
+                ) : display.compositionEtiquette?.additifs?.length ? (
+                  <p>{display.compositionEtiquette.additifs.join(', ')}</p>
+                ) : (
+                  <p className="pd-text-sm pd-text-muted">Aucun additif renseigne.</p>
+                )}
+              </div>
               {editMode ? (
-                <input
-                  className="pd-input"
-                  value={(draft.compositionEtiquette?.additifs || []).join(', ')}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      compositionEtiquette: {
-                        ...(prev.compositionEtiquette ?? {}),
-                        additifs: e.target.value
-                          .split(',')
-                          .map((value) => value.trim())
-                          .filter(Boolean),
-                      },
-                    }))
-                  }
-                />
-              ) : display.compositionEtiquette?.additifs?.length ? (
-                <p>{display.compositionEtiquette.additifs.join(', ')}</p>
+                <div className="pd-nutrition">
+                  <div className="pd-nutrition__header">Nutrition pour 100g</div>
+                  <div className="pd-grid pd-grid--three pd-gap-sm pd-text-xs">
+                    {NUTRITION_FIELDS.map((field) => (
+                      <label key={field.key} className="pd-stack pd-stack--xs">
+                        <span className="pd-text-muted">{field.label}</span>
+                        <input
+                          className="pd-input"
+                          value={draft.compositionEtiquette?.nutrition?.[field.key] ?? ''}
+                          onChange={(e) => handleNutritionChange(field.key, e.target.value)}
+                          placeholder="0"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ) : display.compositionEtiquette?.nutrition ? (
+                <div className="pd-nutrition">
+                  <div className="pd-nutrition__header">Nutrition pour 100g</div>
+                  <div className="pd-grid pd-grid--three pd-gap-sm pd-text-xs">
+                    {NUTRITION_FIELDS.map((field) => {
+                      const value = display.compositionEtiquette?.nutrition?.[field.key];
+                      if (!value) return null;
+                      return (
+                        <div key={field.key} className="pd-row pd-row--between">
+                          <span className="pd-text-muted">{field.label}</span>
+                          <span>{value}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               ) : (
-                <p className="pd-text-sm pd-text-muted">Aucun additif renseigne.</p>
+                <p className="pd-text-sm pd-text-muted">Valeurs nutritionnelles a renseigner.</p>
               )}
             </div>
-            {display.compositionEtiquette?.nutrition ? (
-              <div className="pd-nutrition">
-                <div className="pd-nutrition__header">Nutrition pour 100g</div>
-                <div className="pd-grid pd-grid--three pd-gap-sm pd-text-xs">
-                  {Object.entries(display.compositionEtiquette.nutrition).map(([key, value]) => (
-                    <div key={key} className="pd-row pd-row--between">
-                      <span className="pd-text-muted">{key.replace(/_/g, ' ')}</span>
-                      <span>{value}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <p className="pd-text-sm pd-text-muted">Valeurs nutritionnelles a renseigner.</p>
-            )}
           </div>
         </div>
       </div>
@@ -1382,6 +3162,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   const renderTabContent = () => {
     if (activeTab === 'circuit') return circuitTab;
+    if (activeTab === 'lot') return lotTab;
     if (activeTab === 'quality') return qualityTab;
     if (activeTab === 'repartition') return repartitionTab;
     if (activeTab === 'consumption') return consumptionTab;
@@ -1409,7 +3190,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   const canToggleSave = Boolean(onToggleSave);
   const headerActions = React.useMemo(() => {
-    if (!onHeaderActionsChange) return null;
+    if (!onHeaderActionsChange || isCreateMode) return null;
     return (
       <>
         <button
@@ -1430,14 +3211,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             className="header-action-button header-action-button--ghost"
           >
             <PenLine className="header-action-icon" />
-            <span className="header-action-label">
-              {editMode ? 'Quitter le mode edition' : 'Modifier'}
-            </span>
+            <span className="header-action-label">{editMode ? 'Quitter le mode edition' : 'Modifier'}</span>
           </button>
         ) : null}
       </>
     );
-  }, [canToggleSave, editMode, handleSaveToggle, isOwner, isSaved, onHeaderActionsChange]);
+  }, [canToggleSave, editMode, handleSaveToggle, isCreateMode, isOwner, isSaved, onHeaderActionsChange]);
 
   React.useEffect(() => {
     if (!onHeaderActionsChange) return;
@@ -1455,57 +3234,54 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         {isOwner && editMode ? (
           <div className="pd-card pd-card--soft pd-card--dashed pd-stack pd-stack--sm">
             {editCTA}
-            <label className="pd-row pd-row--start pd-gap-sm pd-text-sm">
-              <input
-                type="checkbox"
-                checked={notifyFollowers}
-                onChange={(e) => setNotifyFollowers(e.target.checked)}
-                className="pd-checkbox"
-              />
-              <div className="pd-stack pd-stack--xs">
-                <span className="pd-text-strong">Notifier les personnes qui suivent ce produit</span>
-                <p className="pd-text-sm pd-text-muted">Décochez si vous ne souhaitez pas notifier les personnes qui suivent ce produit.</p>
-              </div>
-            </label>
-            {notifyFollowers ? (
-              <div className="pd-stack pd-stack--xs">
-                <label className="pd-text-strong" htmlFor="notification-message">
-                  Message de notification
+            {!isCreateMode ? (
+              <>
+                <label className="pd-row pd-row--start pd-gap-sm pd-text-sm">
+                  <input
+                    type="checkbox"
+                    checked={notifyFollowers}
+                    onChange={(e) => setNotifyFollowers(e.target.checked)}
+                    className="pd-checkbox"
+                  />
+                  <div className="pd-stack pd-stack--xs">
+                    <span className="pd-text-strong">Notifier les personnes qui suivent ce produit</span>
+                    <p className="pd-text-sm pd-text-muted">
+                      Décochez si vous ne souhaitez pas notifier les personnes qui suivent ce produit.
+                    </p>
+                  </div>
                 </label>
-                <textarea
-                  id="notification-message"
-                  className="pd-textarea"
-                  placeholder="Ex : Nouveau lot disponible / Changement de DLC / Nouveau format..."
-                  value={notificationMessage}
-                  onChange={(e) => setNotificationMessage(e.target.value)}
-                />
-                <div className="pd-preview pd-stack pd-stack--xs">
-                  <p className="pd-text-strong">Apercu de la notification</p>
-                  <p className="pd-text-body">{detail.name}</p>
-                  <p>{notificationMessage || 'Message a ajouter pour notifier vos abonnes.'}</p>
-                  <p className="pd-link-accent">Lien vers le produit</p>
-                </div>
-              </div>
+                {notifyFollowers ? (
+                  <div className="pd-stack pd-stack--xs">
+                    <label className="pd-text-strong" htmlFor="notification-message">
+                      Message de notification
+                    </label>
+                    <textarea
+                      id="notification-message"
+                      className="pd-textarea"
+                      placeholder="Ex : Nouveau lot disponible / Changement de DLC / Nouveau format..."
+                      value={notificationMessage}
+                      onChange={(e) => setNotificationMessage(e.target.value)}
+                    />
+                    <div className="pd-preview pd-stack pd-stack--xs">
+                      <p className="pd-text-strong">Apercu de la notification</p>
+                      <p className="pd-text-body">{detail.name}</p>
+                      <p>{notificationMessage || 'Message a ajouter pour notifier vos abonnes.'}</p>
+                      <p className="pd-link-accent">Lien vers le produit</p>
+                    </div>
+                  </div>
+                ) : null}
+              </>
             ) : null}
             <div className="pd-row pd-row--wrap pd-gap-sm">
-              <button
-                type="button"
-                onClick={handleSaveEdit}
-                className="pd-btn pd-btn--primary pd-btn--pill"
-              >
-                Enregistrer
+              <button type="button" onClick={handleSaveEdit} className="pd-btn pd-btn--primary pd-btn--pill">
+                {isCreateMode ? 'Publier le produit' : 'Enregistrer'}
               </button>
-              <button
-                type="button"
-                onClick={() => setEditMode(false)}
-                className="pd-btn pd-btn--outline pd-btn--pill"
-              >
-                Annuler
+              <button type="button" onClick={handleCancelEdit} className="pd-btn pd-btn--outline pd-btn--pill">
+                {isCreateMode ? 'Reinitialiser' : 'Annuler'}
               </button>
             </div>
           </div>
         ) : null}
-
         <div className="pd-card pd-card--hero pd-card--tabs pd-stack pd-stack--lg">
           <div className="pd-grid pd-grid--hero pd-gap-lg">
           <div className="pd-stack pd-stack--md">
@@ -1513,12 +3289,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               <span className="pd-badge pd-badge--category">
                 {displayCategory}
               </span>
-              {display.officialBadges?.map((badge) => (
+              {displayOfficialBadges.map((badge) => (
                 <span key={badge} className="pd-badge pd-badge--official">
                   {badge}
                 </span>
               ))}
-              {display.platformBadges?.map((badge) => (
+              {displayPlatformBadges.map((badge) => (
                 <span key={badge} className="pd-badge pd-badge--platform">
                   {badge}
                 </span>
@@ -1531,12 +3307,21 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   value={draft.name}
                   onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
                 />
-                <input
-                  className="pd-input"
-                  value={draft.category || ''}
+                <select
+                  className="pd-select"
+                  value={selectedCategory}
                   onChange={(e) => setDraft((prev) => ({ ...prev, category: e.target.value }))}
-                  placeholder="Categorie"
-                />
+                  aria-label="Categorie"
+                >
+                  <option value="" disabled>
+                    Choisir une categorie
+                  </option>
+                  {availableCategories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
               </div>
             ) : (
               <div className="pd-stack pd-stack--xs">
@@ -1569,39 +3354,69 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               </div>
             </button>
 
-            <div className="pd-row pd-row--wrap pd-gap-sm pd-text-sm">
-              <span className="pd-price">{product.price.toFixed(2)} €</span>
-              <span className="pd-measurement-inline">
-                {measurementLabel} ({unitValue})
-              </span>
-            </div>
-
             {editMode ? (
-              <div className="pd-row pd-row--wrap pd-gap-sm">
-                <label className="pd-stack pd-stack--xs" htmlFor="product-measurement">
-                  <span className="pd-label">Mesure</span>
-                  <select
-                    id="product-measurement"
-                    className="pd-select"
-                    value={localMeasurement}
-                    onChange={(e) => setLocalMeasurement(e.target.value as Product['measurement'])}
-                  >
-                    <option value="kg">Kg</option>
-                    <option value="unit">Unité</option>
-                  </select>
-                </label>
-                <label className="pd-stack pd-stack--xs" htmlFor="product-unit">
-                  <span className="pd-label">Unité</span>
-                  <input
-                    id="product-unit"
-                    className="pd-input"
-                    value={localUnit}
-                    onChange={(e) => setLocalUnit(e.target.value)}
-                    placeholder="Ex : colis, bouteille"
-                  />
-                </label>
+              <>
+                <div className="pd-row pd-row--wrap pd-gap-sm">
+                  <label className="pd-stack pd-stack--xs" htmlFor="product-price">
+                    <span className="pd-label">Prix (en €)</span>
+                    <input
+                      id="product-price"
+                      type="number"
+                      step="0.01"
+                      className="pd-input"
+                      value={Number.isFinite(localPrice) ? localPrice : 0}
+                      onChange={(e) => setLocalPrice(Number(e.target.value))}
+                      placeholder="0.00"
+                    />
+                  </label>
+                </div>
+                <div className="pd-row pd-row--wrap pd-gap-sm">
+                  <label className="pd-stack pd-stack--xs" htmlFor="product-measurement">
+                    <span className="pd-label">Unite de vente</span>
+                    <select
+                      id="product-measurement"
+                      className="pd-select"
+                      value={localMeasurement}
+                      onChange={(e) => setLocalMeasurement(e.target.value as Product['measurement'])}
+                    >
+                      <option value="kg">Kg</option>
+                      <option value="unit">Unite</option>
+                    </select>
+                  </label>
+                  <label className="pd-stack pd-stack--xs" htmlFor="product-unit">
+                    <span className="pd-label">Conditionnement</span>
+                    <input
+                      id="product-unit"
+                      className="pd-input"
+                      value={localUnit}
+                      onChange={(e) => setLocalUnit(e.target.value)}
+                      placeholder="Ex : colis, bouteille"
+                    />
+                  </label>
+                  <label className="pd-stack pd-stack--xs" htmlFor="product-weight">
+                    <span className="pd-label">Poids unitaire (kg)</span>
+                    <input
+                      id="product-weight"
+                      type="number"
+                      step="0.01"
+                      className="pd-input"
+                      value={localWeightKg}
+                      onChange={(e) =>
+                        setLocalWeightKg(e.target.value ? Number(e.target.value) : '')
+                      }
+                      placeholder="Ex : 0.25"
+                    />
+                  </label>
+                </div>
+              </>
+            ) : (
+              <div className="pd-row pd-row--wrap pd-gap-sm pd-text-sm">
+                <span className="pd-price">{product.price.toFixed(2)} €</span>
+                <span className="pd-measurement-inline">
+                  {measurementLabel} ({unitValue})
+                </span>
               </div>
-            ) : null}
+            )}
 
             {editMode ? (
               <textarea
@@ -1614,52 +3429,44 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             ) : display.longDescription ? (
               <p className="pd-callout">{display.longDescription}</p>
             ) : null}
-
-            <div className="pd-row pd-row--wrap pd-row--start pd-gap-sm">
-              <button
-                type="button"
-                onClick={onCreateOrder}
-                className="pd-btn pd-btn--primary pd-btn--pill"
-              >
-                Créer une commande avec ce produit
-              </button>
-              <button
-                type="button"
-                onClick={onParticipate}
-                disabled={!hasOrders}
-                className={`pd-btn pd-btn--pill ${hasOrders ? 'pd-btn--outline-primary' : 'pd-btn--disabled'}`}
-              >
-                Trouver des commandes de ce produit{' '}
-                <span className="pd-text-xs pd-text-muted">({summaryOrdersLabel})</span>
-              </button>
-            </div>
+            {!isCreateMode ? (
+              <div className="pd-row pd-row--wrap pd-row--start pd-gap-sm">
+                <button
+                  type="button"
+                  onClick={onCreateOrder}
+                  className="pd-btn pd-btn--primary pd-btn--pill"
+                >
+                  Creer une commande avec ce produit
+                </button>
+                <button
+                  type="button"
+                  onClick={onParticipate}
+                  disabled={!hasOrders}
+                  className={`pd-btn pd-btn--pill ${hasOrders ? 'pd-btn--outline-primary' : 'pd-btn--disabled'}`}
+                >
+                  Trouver des commandes de ce produit{' '}
+                  <span className="pd-text-xs pd-text-muted">({summaryOrdersLabel})</span>
+                </button>
+              </div>
+            ) : null}
           </div>
 
           <div className="pd-stack pd-stack--md">
-            <div className="pd-media-card">
-              <ImageWithFallback src={displayImage} alt={display.name} className="pd-media-image" />
-            </div>
             {editMode ? (
-              <label className="pd-stack pd-stack--xs" htmlFor="product-image-url">
-                <span className="pd-label">Image du produit</span>
-                <input
-                  id="product-image-url"
-                  className="pd-input"
-                  value={draft.productImage?.url || ''}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      productImage: {
-                        ...(prev.productImage ?? { url: '', alt: prev.name }),
-                        url: e.target.value,
-                        alt: prev.productImage?.alt ?? prev.name,
-                      },
-                    }))
-                  }
-                  placeholder="URL de l'image"
+              <ProductImageUploader
+                currentUrl={displayImage}
+                alt={display.name || 'Produit'}
+                onImageChange={handleProductImageChange}
+              />
+            ) : (
+              <div className="pd-media-card">
+                <ImageWithFallback
+                  src={displayImage}
+                  alt={display.name ?? undefined}
+                  className="pd-media-image"
                 />
-              </label>
-            ) : null}
+              </div>
+            )}
           </div>
           </div>
 

@@ -101,7 +101,7 @@ export function AboutUsView() {
               <li>Exige un engagement dans la durée</li>
               <li>Des jours, lieux et horaires de récupération parfois contraignants</li>
               <li>On ne choisit pas le contenu de son panier</li>
-              <li>Une partie dun fonctionnement d'une AMAP repose sur le bénévolat</li>
+              <li>Une partie du fonctionnement d'une AMAP repose sur le bénévolat</li>
               <li>Les amapiens sont peu diversifiés socialement</li>
             </ul>
           </article>
@@ -143,7 +143,7 @@ export function AboutUsView() {
           <article className="about-card">
             <h3 className="about-card__title">La commande groupée, mais sans la galère</h3>
             <ul className="about-list">
-              <li>Partage fait le travail d'identifier de bons producteurs.</li>
+              <li>« Partage » fait pour vous le travail d'identifier de bons producteurs.</li>
               <li>La prise de commande est gérée par le site</li>
               <li>Pas d'échange d'argent entre les participants, tout est géré par le site</li>
               <li>La simplicité permet d'en faire plus souvent</li>

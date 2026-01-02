@@ -19,6 +19,13 @@ type CropRect = {
   size: number;
 };
 
+type RectCropRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 const canvasToBlob = (canvas: HTMLCanvasElement, type: string, quality?: number) =>
   new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
@@ -88,6 +95,13 @@ export const prepareImageForCrop = async (file: File, maxDimension = 1024): Prom
 export const getCoverScale = (sourceWidth: number, sourceHeight: number, cropSize: number) =>
   Math.max(cropSize / sourceWidth, cropSize / sourceHeight);
 
+export const getCoverScaleForRect = (
+  sourceWidth: number,
+  sourceHeight: number,
+  cropWidth: number,
+  cropHeight: number
+) => Math.max(cropWidth / sourceWidth, cropHeight / sourceHeight);
+
 export const clampOffset = (
   offset: Offset,
   sourceWidth: number,
@@ -97,6 +111,23 @@ export const clampOffset = (
 ): Offset => {
   const maxOffsetX = Math.max(0, (sourceWidth * scale) / 2 - cropSize / 2);
   const maxOffsetY = Math.max(0, (sourceHeight * scale) / 2 - cropSize / 2);
+
+  return {
+    x: Math.min(maxOffsetX, Math.max(-maxOffsetX, offset.x)),
+    y: Math.min(maxOffsetY, Math.max(-maxOffsetY, offset.y)),
+  };
+};
+
+export const clampOffsetForRect = (
+  offset: Offset,
+  sourceWidth: number,
+  sourceHeight: number,
+  cropWidth: number,
+  cropHeight: number,
+  scale: number
+): Offset => {
+  const maxOffsetX = Math.max(0, (sourceWidth * scale) / 2 - cropWidth / 2);
+  const maxOffsetY = Math.max(0, (sourceHeight * scale) / 2 - cropHeight / 2);
 
   return {
     x: Math.min(maxOffsetX, Math.max(-maxOffsetX, offset.x)),
@@ -119,6 +150,27 @@ export const getCropRect = (
     x: Math.max(0, Math.min(sourceWidth - size, x)),
     y: Math.max(0, Math.min(sourceHeight - size, y)),
     size,
+  };
+};
+
+export const getCropRectForRect = (
+  sourceWidth: number,
+  sourceHeight: number,
+  cropWidth: number,
+  cropHeight: number,
+  scale: number,
+  offset: Offset
+): RectCropRect => {
+  const width = cropWidth / scale;
+  const height = cropHeight / scale;
+  const x = sourceWidth / 2 - width / 2 - offset.x / scale;
+  const y = sourceHeight / 2 - height / 2 - offset.y / scale;
+
+  return {
+    x: Math.max(0, Math.min(sourceWidth - width, x)),
+    y: Math.max(0, Math.min(sourceHeight - height, y)),
+    width,
+    height,
   };
 };
 
@@ -146,6 +198,35 @@ export const renderCroppedCanvas = (
     0,
     outputSize,
     outputSize
+  );
+  return canvas;
+};
+
+export const renderCroppedCanvasRect = (
+  source: ImageSource,
+  cropRect: RectCropRect,
+  outputWidth: number,
+  outputHeight: number
+) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = outputWidth;
+  canvas.height = outputHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Canvas context unavailable.');
+  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(
+    source,
+    cropRect.x,
+    cropRect.y,
+    cropRect.width,
+    cropRect.height,
+    0,
+    0,
+    outputWidth,
+    outputHeight
   );
   return canvas;
 };

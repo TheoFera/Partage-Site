@@ -1,7 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { SupabaseClient, User as SupabaseAuthUser } from '@supabase/supabase-js';
-import { LogOut, Pencil, Share2 } from 'lucide-react';
+import { Check, LogOut, Pencil, Share2 } from 'lucide-react';
 import { Header, type SearchSuggestion } from './components/Header';
 import { Navigation } from './components/Navigation';
 import { CreateOrderForm } from './components/CreateOrderForm';
@@ -22,9 +22,26 @@ import { AuthPage } from './components/AuthPage';
 import { ShareOverlay } from './components/ShareOverlay';
 import { mockProducts, mockUser, mockGroupOrders } from './data/mockData';
 import { ProductDetailView } from './components/ProductDetailView';
-import { buildDefaultProductDetail, mockProductDetails } from './data/mockProductDetails';
-import { Product, DeckCard, User, GroupOrder, UserRole, DeliveryDay, LegalEntity, OrderPurchaseDraft } from './types';
+import {
+  CreateProductPayload,
+  Product,
+  ProductDetail,
+  ProducerLabelDetail,
+  DeckCard,
+  User,
+  GroupOrder,
+  UserRole,
+  DeliveryDay,
+  LegalEntity,
+  OrderPurchaseDraft,
+} from './types';
 import { getSupabaseClient } from './lib/supabaseClient';
+import { DEMO_MODE, getLotByCode, getProductByCode, listProducts } from './data/productsProvider';
+import {
+  PRODUCER_LABELS_DESCRIPTION_COLUMN,
+  PRODUCER_LABELS_TABLE,
+  PRODUCER_LABELS_YEAR_COLUMN,
+} from './data/producerLabels';
 import { toast, Toaster } from 'sonner';
 
 const tabRoutes = {
@@ -83,6 +100,9 @@ const producerTagsMap: Record<string, string[]> = {
   p5: ['autre'],
 };
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (value?: string | null) => Boolean(value && UUID_REGEX.test(value));
+
 const mockNotifications = [
   {
     id: 'notif-1',
@@ -121,6 +141,13 @@ const getTabFromPath = (pathname: string) => {
   if (pathname === '/produit/nouveau') return 'profile';
   if (pathname.startsWith('/profil')) return 'profile';
   return 'home';
+};
+
+const parseSlugAndCode = (value?: string | null) => {
+  if (!value) return { slug: null, productCode: null };
+  const lastDash = value.lastIndexOf('-');
+  if (lastDash <= 0) return { slug: null, productCode: value };
+  return { slug: value.slice(0, lastDash), productCode: value.slice(lastDash + 1) };
 };
 
 const NotFound = ({ message }: { message: string }) => (
@@ -322,6 +349,9 @@ type LegalEntityRow = {
   siret: string;
   vat_number: string | null;
   entity_type: string;
+  producer_category?: string | null;
+  iban?: string | null;
+  account_holder_name?: string | null;
   delivery_lead_type?: string | null;
   delivery_lead_days?: number | null;
   delivery_fixed_day?: string | null;
@@ -380,6 +410,9 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   siret: row.siret,
   vatNumber: row.vat_number ?? undefined,
   entityType: (row.entity_type as LegalEntity['entityType']) ?? 'company',
+  producerCategory: row.producer_category ?? undefined,
+  iban: row.iban ?? undefined,
+  accountHolderName: row.account_holder_name ?? undefined,
   deliveryLeadType: (row.delivery_lead_type as LegalEntity['deliveryLeadType']) ?? undefined,
   deliveryLeadDays: row.delivery_lead_days ?? undefined,
   deliveryFixedDay: normalizeDeliveryDayValue(row.delivery_fixed_day),
@@ -481,6 +514,7 @@ type ProfileRouteProps = {
   onOpenProduct: (productId: string) => void;
   supabaseClient?: SupabaseClient | null;
   onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
+  onRegisterSave?: (handler: (() => void) | null) => void;
   forceOwn?: boolean;
 };
 
@@ -508,6 +542,7 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
   onOpenProduct,
   supabaseClient,
   onAvatarUpdated,
+  onRegisterSave,
   forceOwn,
 }) => {
   const params = useParams<{ handle?: string }>();
@@ -662,6 +697,7 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
       onOpenProduct={onOpenProduct}
       supabaseClient={supabaseClient ?? null}
       onAvatarUpdated={onAvatarUpdated}
+      onRegisterSave={onRegisterSave}
     />
   );
 };
@@ -672,6 +708,9 @@ type ProductRouteViewProps = {
   groupOrders: GroupOrder[];
   user: User | null;
   canSaveProduct: boolean;
+  useDemoProducts: boolean;
+  createdProductDetails: Record<string, ProductDetail>;
+  supabaseClient?: SupabaseClient | null;
   onHeaderActionsChange: React.Dispatch<React.SetStateAction<React.ReactNode | null>>;
   onOpenProducer: (product: Product) => void;
   onOpenRelatedProduct: (productId: string) => void;
@@ -687,6 +726,9 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
   groupOrders,
   user,
   canSaveProduct,
+  useDemoProducts,
+  createdProductDetails,
+  supabaseClient,
   onHeaderActionsChange,
   onOpenProducer,
   onOpenRelatedProduct,
@@ -695,29 +737,33 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
   onRemoveFromDeck,
   onShareProduct,
 }) => {
-  const params = useParams<{ id: string }>();
+  const params = useParams<{ id?: string; slugAndCode?: string; lot_code?: string }>();
   const navigate = useNavigate();
-  const product = React.useMemo(() => products.find((item) => item.id === params.id), [products, params.id]);
-  const detail = React.useMemo(
-    () => (product ? mockProductDetails[product.id] ?? buildDefaultProductDetail(product) : null),
-    [product]
+  const productCode = params.slugAndCode
+    ? parseSlugAndCode(params.slugAndCode).productCode
+    : params.id ?? null;
+  const lotCode = params.lot_code ?? null;
+  const [product, setProduct] = React.useState<Product | null>(null);
+  const [detail, setDetail] = React.useState<ProductDetail | null>(null);
+  const [activeLotCode, setActiveLotCode] = React.useState<string | null>(null);
+  const [isLoading, setIsLoading] = React.useState(false);
+  const [producerProfileLabels, setProducerProfileLabels] = React.useState<ProducerLabelDetail[]>([]);
+
+  const ordersForProduct = React.useMemo(() => {
+    if (!product) return [] as GroupOrder[];
+    return groupOrders.filter((order) =>
+      order.products.some((item) => item.id === product.id || item.name === product.name)
+    );
+  }, [groupOrders, product?.id, product?.name]);
+
+  const isOwner = Boolean(
+    product && user && (user.producerId === product.producerId || user.id === product.producerId)
   );
 
-  if (!product || !detail) {
-    return <NotFound message="Produit introuvable." />;
-  }
-
-  const inDeck = deck.some((card) => card.id === product.id);
-  const ordersForProduct = React.useMemo(
-    () =>
-      groupOrders.filter((order) =>
-        order.products.some((item) => item.id === product.id || item.name === product.name)
-      ),
-    [groupOrders, product.id, product.name]
-  );
-  const isOwner = Boolean(user && (user.producerId === product.producerId || user.id === product.producerId));
+  const inDeck = Boolean(product && deck.some((card) => card.id === product.id));
 
   const handleParticipate = React.useCallback(() => {
+    if (!product) return;
     if (!ordersForProduct.length) {
       toast.info('Aucune commande active pour ce produit.');
     }
@@ -725,10 +771,11 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     search.set('search', product.name);
     search.set('filter', 'contientProduit');
     navigate(`/commandes?${search.toString()}`);
-  }, [navigate, ordersForProduct.length, product.name]);
+  }, [navigate, ordersForProduct.length, product]);
 
   const handleToggleSave = React.useCallback(
     (next: boolean) => {
+      if (!product) return;
       if (next) {
         onAddToDeck(product);
       } else {
@@ -738,21 +785,128 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     [onAddToDeck, onRemoveFromDeck, product]
   );
 
-  return (
-    <ProductDetailView
-      product={product}
-      detail={detail}
-      ordersWithProduct={ordersForProduct}
-      isOwner={isOwner}
-      isSaved={inDeck}
-      catalog={products}
-      onHeaderActionsChange={onHeaderActionsChange}
-      onOpenProducer={onOpenProducer}
-      onOpenRelatedProduct={onOpenRelatedProduct}
+  React.useEffect(() => {
+    let active = true;
+    if (!productCode) {
+      setProduct(null);
+      setDetail(null);
+      setActiveLotCode(null);
+      return () => {
+        active = false;
+      };
+    }
+    setIsLoading(true);
+    const run = async () => {
+      const localDetail = !lotCode ? createdProductDetails[productCode] : null;
+      const localProduct = !lotCode
+        ? products.find((item) => item.productCode === productCode || item.id === productCode) ?? null
+        : null;
+      if (localDetail && localProduct) {
+        setProduct(localProduct);
+        setDetail(localDetail);
+        setActiveLotCode(null);
+        setIsLoading(false);
+        return;
+      }
+      const result = lotCode
+        ? await getLotByCode(lotCode, useDemoProducts)
+        : await getProductByCode(productCode, useDemoProducts);
+      if (!active) return;
+      if (!result) {
+        setProduct(null);
+        setDetail(null);
+        setActiveLotCode(null);
+        setIsLoading(false);
+        return;
+      }
+      setProduct(result.product);
+      setDetail(result.detail);
+      let nextLotCode: string | null = null;
+      if ('activeLotCode' in result) {
+        nextLotCode = result.activeLotCode ?? null;
+      } else if ('lotCode' in result) {
+        nextLotCode = result.lotCode ?? null;
+      }
+      setActiveLotCode(nextLotCode);
+      setIsLoading(false);
+    };
+    run();
+    return () => {
+      active = false;
+    };
+  }, [createdProductDetails, lotCode, productCode, products, useDemoProducts]);
+
+  React.useEffect(() => {
+    let active = true;
+    if (!supabaseClient || !product?.producerId || !isUuid(product.producerId)) {
+      setProducerProfileLabels([]);
+      return () => {
+        active = false;
+      };
+    }
+
+    supabaseClient
+      .from(PRODUCER_LABELS_TABLE)
+      .select('*')
+      .eq('profile_id', product.producerId)
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.warn('Producer labels load error:', error);
+          setProducerProfileLabels([]);
+          return;
+        }
+        const rows = (data as Array<Record<string, unknown>>) ?? [];
+        const mapped = rows
+          .map((row) => {
+            const labelValue = typeof row.label === 'string' ? row.label.trim() : '';
+            if (!labelValue) return null;
+            const descriptionValue = row[PRODUCER_LABELS_DESCRIPTION_COLUMN];
+            const description =
+              typeof descriptionValue === 'string' ? descriptionValue.trim() : undefined;
+            const yearValue = row[PRODUCER_LABELS_YEAR_COLUMN];
+            const obtentionYear = toNumberOrUndefined(yearValue);
+            return { label: labelValue, description, obtentionYear };
+          })
+          .filter(Boolean) as ProducerLabelDetail[];
+        setProducerProfileLabels(mapped);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [product?.producerId, supabaseClient]);
+
+  if (isLoading && !product) {
+    return <NotFound message="Chargement du produit..." />;
+  }
+
+  if (!product || !detail) {
+    return <NotFound message="Produit introuvable." />;
+  }
+
+  if (!detail.productions?.length) {
+    return <NotFound message="Produit non disponible." />;
+  }
+
+      return (
+      <ProductDetailView
+        product={product}
+        detail={detail}
+        ordersWithProduct={ordersForProduct}
+        isOwner={isOwner}
+        isSaved={inDeck}
+        catalog={products}
+        supabaseClient={supabaseClient ?? null}
+        producerProfileLabels={producerProfileLabels}
+        onHeaderActionsChange={onHeaderActionsChange}
+        onOpenProducer={onOpenProducer}
+        onOpenRelatedProduct={onOpenRelatedProduct}
       onShare={() => onShareProduct(product)}
       onCreateOrder={() => onStartOrderFromProduct(product)}
       onParticipate={handleParticipate}
       onToggleSave={canSaveProduct ? handleToggleSave : undefined}
+      initialLotId={lotCode ?? activeLotCode ?? undefined}
     />
   );
 };
@@ -783,6 +937,8 @@ export default function App() {
   }, []);
   const [user, setUser] = React.useState<User | null>(null);
   const [products, setProducts] = React.useState<Product[]>(mockProducts);
+  const [createdProductDetails, setCreatedProductDetails] = React.useState<Record<string, ProductDetail>>({});
+  const [useDemoProducts, setUseDemoProducts] = React.useState<boolean>(DEMO_MODE);
   const [groupOrders, setGroupOrders] = React.useState<GroupOrder[]>(mockGroupOrders);
   const [deck, setDeck] = React.useState<DeckCard[]>([]);
   const [orderBuilderProducts, setOrderBuilderProducts] = React.useState<DeckCard[] | null>(null);
@@ -803,6 +959,24 @@ export default function App() {
   const [guestLocationStatus, setGuestLocationStatus] = React.useState<
     'idle' | 'requesting' | 'granted' | 'denied' | 'unsupported' | 'error'
   >('idle');
+  React.useEffect(() => {
+    let active = true;
+    listProducts()
+      .then(({ products: nextProducts, isDemo }) => {
+        if (!active) return;
+        setProducts(nextProducts);
+        setUseDemoProducts(isDemo);
+      })
+      .catch((error) => {
+        console.warn('Products listing error:', error);
+        if (!active) return;
+        setProducts(mockProducts);
+        setUseDemoProducts(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   const requestGuestLocation = React.useCallback(() => {
     if (typeof window === 'undefined' || typeof navigator === 'undefined') return;
     if (!navigator.geolocation) {
@@ -874,9 +1048,14 @@ export default function App() {
     if (typeof window === 'undefined') return path;
     return `${window.location.origin}${path}`;
   }, []);
+  const getProductPath = React.useCallback((product: Product) => {
+    const code = product.productCode ?? product.id;
+    const slug = product.slug ?? slugify(product.name);
+    return `/produits/${slug || 'produit'}-${code}`;
+  }, []);
   const buildProductSharePayload = React.useCallback(
     (product: Product) => ({
-      link: getAbsoluteLink(`/produit/${product.id}`),
+      link: getAbsoluteLink(getProductPath(product)),
       title: product.name,
       subtitle: `${product.producerName} - ${product.price.toFixed(2)} € / ${product.unit}`,
       description:
@@ -887,7 +1066,7 @@ export default function App() {
         { label: 'Disponibilite', value: product.inStock ? 'Disponible' : 'Bientot disponible' },
       ],
     }),
-    [getAbsoluteLink]
+    [getAbsoluteLink, getProductPath]
   );
   const buildOrderSharePayload = React.useCallback(
     (order: GroupOrder) => {
@@ -971,6 +1150,12 @@ export default function App() {
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [notificationsOpen, setNotificationsOpen] = React.useState(false);
   const [profileMode, setProfileMode] = React.useState<'view' | 'edit'>('view');
+  const profileSaveHandlerRef = React.useRef<(() => void) | null>(null);
+  const [canSaveProfile, setCanSaveProfile] = React.useState(false);
+  const registerProfileSaveHandler = React.useCallback((handler: (() => void) | null) => {
+    profileSaveHandlerRef.current = handler;
+    setCanSaveProfile(Boolean(handler));
+  }, []);
   const [followingProfiles, setFollowingProfiles] = React.useState<Record<string, boolean>>({});
   const prevRoleRef = React.useRef<User['role'] | null>(null);
   const lastTabRef = React.useRef<string | null>(null);
@@ -980,9 +1165,13 @@ export default function App() {
     const match = location.pathname.match(/^\/commande\/([^/]+)/);
     return match ? match[1] : null;
   }, [location.pathname]);
-  const productIdFromPath = React.useMemo(() => {
-    const match = location.pathname.match(/^\/produit\/([^/]+)/);
-    return match ? match[1] : null;
+  const productCodeFromPath = React.useMemo(() => {
+    const match = location.pathname.match(/^\/produits\/([^/]+)/);
+    if (match) {
+      return parseSlugAndCode(match[1]).productCode;
+    }
+    const legacyMatch = location.pathname.match(/^\/produit\/([^/]+)/);
+    return legacyMatch ? legacyMatch[1] : null;
   }, [location.pathname]);
 
   const fetchLegalEntity = React.useCallback(
@@ -1135,6 +1324,8 @@ export default function App() {
 
   const viewer = user ?? mockUser;
   const isAuthenticated = Boolean(user);
+  const isProfileAuthPage = !isAuthenticated && location.pathname === '/profil';
+  const isAuthLayout = isAuthPage || isProfileAuthPage;
   const orderBuilderSource = orderBuilderProducts ?? deck;
   const orderProducer = React.useMemo(() => {
     const sourceProducts = orderBuilderProducts ?? deck;
@@ -1218,7 +1409,7 @@ export default function App() {
       .filter(matchesSearch)
       .slice(0, 6)
       .map((product) => ({
-        id: product.id,
+        id: product.productCode ?? product.id,
         type: 'product' as const,
         label: product.name,
         subtitle: product.producerName,
@@ -1287,11 +1478,15 @@ export default function App() {
     () => (orderIdFromPath ? groupOrders.find((order) => order.id === orderIdFromPath) ?? null : null),
     [groupOrders, orderIdFromPath]
   );
-  const selectedProduct = React.useMemo(
-    () =>
-      productIdFromPath ? products.find((product) => product.id === productIdFromPath) ?? null : null,
-    [productIdFromPath, products]
-  );
+  const selectedProduct = React.useMemo(() => {
+    if (!productCodeFromPath) return null;
+    return (
+      products.find(
+        (product) =>
+          (product.productCode ?? product.id) === productCodeFromPath || product.id === productCodeFromPath
+      ) ?? null
+    );
+  }, [productCodeFromPath, products]);
   const publicOrders = React.useMemo(
     () => groupOrders.filter((order) => order.visibility === 'public' && order.status === 'open'),
     [groupOrders]
@@ -1352,7 +1547,14 @@ export default function App() {
   };
 
   const openProductView = (productId: string) => {
-    navigate(`/produit/${productId}`);
+    const product =
+      products.find((item) => (item.productCode ?? item.id) === productId) ??
+      products.find((item) => item.id === productId);
+    if (product) {
+      navigate(getProductPath(product));
+      return;
+    }
+    navigate(`/produits/produit-${productId}`);
   };
 
   const closeOrderView = () => {
@@ -1590,17 +1792,28 @@ export default function App() {
     openOrderView(newOrder.id);
   };
 
-  const handleAddProduct = (productData: Omit<Product, 'id'>) => {
+  const handleAddProduct = (payload: CreateProductPayload) => {
     if (!user) {
       toast.info('Connectez-vous pour ajouter un produit.');
       redirectToAuth(tabRoutes.create);
       return;
     }
+    const productCode = payload.product.productCode ?? `product-${Date.now()}`;
     const newProduct: Product = {
-      ...productData,
-      id: `product-${Date.now()}`,
+      ...payload.product,
+      productCode,
+      id: productCode,
     };
     setProducts([newProduct, ...products]);
+    setCreatedProductDetails((prev) => ({
+      ...prev,
+      [productCode]: {
+        ...payload.detail,
+        productId: productCode,
+        name: newProduct.name,
+        category: newProduct.category,
+      },
+    }));
     toast.success('Produit ajoute avec succes !');
     setProfileMode('view');
     const targetProfilePath = user.handle ? `/profil/${user.handle}` : tabRoutes.profile;
@@ -1705,6 +1918,9 @@ export default function App() {
           siret: userData.legalEntity.siret,
           vat_number: userData.legalEntity.vatNumber ?? null,
           entity_type: userData.legalEntity.entityType ?? 'company',
+          producer_category: userData.legalEntity.producerCategory ?? null,
+          iban: userData.legalEntity.iban ?? null,
+          account_holder_name: userData.legalEntity.accountHolderName ?? null,
           delivery_lead_type: userData.legalEntity.deliveryLeadType ?? null,
           delivery_lead_days: userData.legalEntity.deliveryLeadDays ?? null,
           delivery_fixed_day: userData.legalEntity.deliveryFixedDay ?? null,
@@ -1955,6 +2171,7 @@ export default function App() {
         deck={deck}
         onAddToDeck={handleAddToDeck}
         onRemoveFromDeck={handleRemoveFromDeck}
+        onOpenProduct={openProductView}
         onOpenOrder={openOrderView}
         onOpenProducer={openProducerProfile}
         onOpenSharer={openSharerProfile}
@@ -1996,7 +2213,9 @@ export default function App() {
     if (activeTab === 'create') return 'Découvrez les produits proches de vous';
     if (activeTab === 'messages') return 'Messages';
     if (activeTab === 'profile') return '';
-    if (location.pathname.startsWith('/produit/')) return selectedProduct?.name ?? 'Produit';
+    if (location.pathname.startsWith('/produits/') || location.pathname.startsWith('/produit/')) {
+      return selectedProduct?.name ?? 'Produit';
+    }
     if (location.pathname.startsWith('/commande/')) return 'Commande';
     return '';
   };
@@ -2004,7 +2223,10 @@ export default function App() {
   const pageTitle = getPageTitle();
   const isOrderView = Boolean(selectedOrder && location.pathname.startsWith('/commande/'));
   const isOrderFlowStep = /\/commande\/[^/]+\/(recap|paiement|partage)/.test(location.pathname);
-  const isProductView = Boolean(selectedProduct && location.pathname.startsWith('/produit/'));
+  const isProductView = Boolean(
+    selectedProduct &&
+      (location.pathname.startsWith('/produits/') || location.pathname.startsWith('/produit/'))
+  );
   const isProfileView = location.pathname.startsWith('/profil');
   const profileShareSource = profileForShare || (isProfileView && user ? user : null);
   const buildCurrentSharePayload = React.useCallback(() => {
@@ -2031,21 +2253,51 @@ export default function App() {
     (location.pathname === '/profil' ||
       (!!user?.handle && location.pathname === `/profil/${user.handle}`));
   const isHome = activeTab === 'home';
-  const mainPadding = activeTab === 'deck' ? 'pb-0' : 'pb-24';
+  const mainPadding = activeTab === 'deck' || isAuthLayout ? 'pb-0' : 'pb-24';
   const shouldUseProfilePadding = hideAuthTitle;
   const mainPaddingTop =
-    activeTab === 'deck' ? 0 : isOrderView ? 96 : isHome && !shouldUseProfilePadding ? 64 : 80; // px values
-  const mainPaddingBottom = activeTab === 'deck' ? '0rem' : activeTab === 'create' ? '0rem' : isOrderView ? '12rem' : '10rem';
+    activeTab === 'deck'
+      ? 0
+      : isAuthLayout
+        ? 64
+        : isOrderView
+          ? 96
+          : isHome && !shouldUseProfilePadding
+            ? 64
+            : 80; // px values
+  const mainPaddingBottom =
+    isAuthLayout
+      ? '0rem'
+      : activeTab === 'deck'
+        ? '0rem'
+        : activeTab === 'create'
+          ? '0rem'
+          : isOrderView
+            ? '12rem'
+            : '10rem';
   const profileHeaderActions =
     activeTab === 'profile' && !isOrderView && isOwnProfileView ? (
       <div className="flex items-center gap-2">
-        <button
-          onClick={handleEditProfile}
-          className="header-action-button header-action-button--primary"
-        >
-          <Pencil className="header-action-icon" />
-          <span className="header-action-label">Modifier le profil</span>
-        </button>
+        {profileMode === 'edit' ? (
+          <button
+            type="button"
+            onClick={() => profileSaveHandlerRef.current?.()}
+            className="header-action-button header-action-button--primary"
+            disabled={!canSaveProfile}
+          >
+            <Check className="header-action-icon" />
+            <span className="header-action-label">Enregistrer</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleEditProfile}
+            className="header-action-button header-action-button--primary"
+          >
+            <Pencil className="header-action-icon" />
+            <span className="header-action-label">Modifier le profil</span>
+          </button>
+        )}
       </div>
     ) : null;
   const authButton = isAuthenticated && isOwnProfileView ? (
@@ -2192,7 +2444,7 @@ export default function App() {
         <AuthWall
           onLogin={() => redirectToAuth(location.pathname, 'login')}
           onSignup={() => redirectToAuth(location.pathname, 'signup')}
-          description="Connectez-vous pour regler cette commande."
+          description="Connectez-vous pour régler cette commande."
         />
       );
     }
@@ -2485,6 +2737,7 @@ export default function App() {
                   onOpenProduct={openProductView}
                   supabaseClient={supabaseClient}
                   onAvatarUpdated={handleAvatarUpdated}
+                  onRegisterSave={registerProfileSaveHandler}
                   forceOwn
                 />
               ) : (
@@ -2523,12 +2776,60 @@ export default function App() {
                 onOpenProduct={openProductView}
                 supabaseClient={supabaseClient}
                 onAvatarUpdated={handleAvatarUpdated}
+                onRegisterSave={registerProfileSaveHandler}
               />
             }
           />
           <Route
             path="/produit/nouveau"
-            element={renderProtected(() => <AddProductForm onAddProduct={handleAddProduct} />, '/produit/nouveau')}
+            element={renderProtected(
+              () => <AddProductForm onAddProduct={handleAddProduct} supabaseClient={supabaseClient} />,
+              '/produit/nouveau'
+            )}
+          />
+          <Route
+            path="/produits/:slugAndCode"
+            element={
+              <ProductRouteView
+                products={products}
+                deck={deck}
+                groupOrders={groupOrders}
+                user={user}
+                canSaveProduct={canSaveProduct}
+                useDemoProducts={useDemoProducts}
+                createdProductDetails={createdProductDetails}
+                supabaseClient={supabaseClient}
+                onHeaderActionsChange={setProductHeaderActions}
+                onOpenProducer={openProducerProfile}
+                onOpenRelatedProduct={openProductView}
+                onStartOrderFromProduct={handleStartOrderFromProduct}
+                onAddToDeck={handleAddToDeck}
+                onRemoveFromDeck={handleRemoveFromDeck}
+                onShareProduct={openProductShare}
+              />
+            }
+          />
+          <Route
+            path="/produits/:slugAndCode/lots/:lot_code"
+            element={
+              <ProductRouteView
+                products={products}
+                deck={deck}
+                groupOrders={groupOrders}
+                user={user}
+                canSaveProduct={canSaveProduct}
+                useDemoProducts={useDemoProducts}
+                createdProductDetails={createdProductDetails}
+                supabaseClient={supabaseClient}
+                onHeaderActionsChange={setProductHeaderActions}
+                onOpenProducer={openProducerProfile}
+                onOpenRelatedProduct={openProductView}
+                onStartOrderFromProduct={handleStartOrderFromProduct}
+                onAddToDeck={handleAddToDeck}
+                onRemoveFromDeck={handleRemoveFromDeck}
+                onShareProduct={openProductShare}
+              />
+            }
           />
           <Route
             path="/produit/:id"
@@ -2539,6 +2840,9 @@ export default function App() {
                 groupOrders={groupOrders}
                 user={user}
                 canSaveProduct={canSaveProduct}
+                useDemoProducts={useDemoProducts}
+                createdProductDetails={createdProductDetails}
+                supabaseClient={supabaseClient}
                 onHeaderActionsChange={setProductHeaderActions}
                 onOpenProducer={openProducerProfile}
                 onOpenRelatedProduct={openProductView}

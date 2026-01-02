@@ -9,9 +9,13 @@
       <script>
         (function () {
           var l = window.location;
+          var basePath = l.pathname.endsWith("/") ? l.pathname.slice(0, -1) : l.pathname;
+          if (l.hash && l.hash.startsWith("#/")) {
+            window.history.replaceState(null, "", basePath + l.hash.slice(1));
+            return;
+          }
           if (l.search[1] === "/") {
             var decoded = l.search.slice(1).split("&").join("?");
-            var basePath = l.pathname.endsWith("/") ? l.pathname.slice(0, -1) : l.pathname;
             window.history.replaceState(null, "", basePath + decoded + l.hash);
           }
         })();

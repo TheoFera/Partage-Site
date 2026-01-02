@@ -15,11 +15,16 @@ import {
   Phone,
   Building2,
 } from 'lucide-react';
-import { DeckCard, DeliveryDay, DeliveryLeadType, GroupOrder, Product, User } from '../types';
+import { DeckCard, DeliveryDay, DeliveryLeadType, GroupOrder, ProducerLabelDetail, Product, User } from '../types';
 import { Avatar } from './Avatar';
 import { AvatarUploader } from './AvatarUploader';
 import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from './ProductsLanding';
 import { toast } from 'sonner';
+import {
+  PRODUCER_LABELS_DESCRIPTION_COLUMN,
+  PRODUCER_LABELS_TABLE,
+  PRODUCER_LABELS_YEAR_COLUMN,
+} from '../data/producerLabels';
 
 type TabKey = 'products' | 'orders' | 'selection';
 
@@ -31,6 +36,18 @@ const deliveryDayOptions: Array<{ id: DeliveryDay; label: string }> = [
   { id: 'friday', label: 'Vendredi' },
   { id: 'saturday', label: 'Samedi' },
   { id: 'sunday', label: 'Dimanche' },
+];
+
+const producerCategoryOptions: Array<{ id: string; label: string }> = [
+  { id: 'eleveur', label: 'Eleveur' },
+  { id: 'maraicher', label: 'Maraicher' },
+  { id: 'arboriculteur', label: 'Arboriculteur' },
+  { id: 'cerealier', label: 'Céréalier' },
+  { id: 'producteur_laitier_fromager', label: 'Producteur laitier / fromager' },
+  { id: 'apiculteur', label: 'Apiculteur' },
+  { id: 'viticulteur_cidriculteur_brasseur', label: 'Viticulteur / Cidriculteur / Brasseur' },
+  { id: 'pisciculteur_conchyliculteur', label: 'Pisciculteur / Conchyliculteur' },
+  { id: 'autre', label: 'Autre' },
 ];
 
 const statusLabels: Record<GroupOrder['status'], string> = {
@@ -70,6 +87,7 @@ interface ProfileViewProps {
   onOpenProduct?: (productId: string) => void;
   supabaseClient?: SupabaseClient | null;
   onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
+  onRegisterSave?: (handler: (() => void) | null) => void;
 }
 
 export function ProfileView({
@@ -93,6 +111,7 @@ export function ProfileView({
   onOpenProduct,
   supabaseClient,
   onAvatarUpdated,
+  onRegisterSave,
 }: ProfileViewProps) {
   const [internalMode, setInternalMode] = React.useState<'view' | 'edit'>('view');
   const mode = modeProp ?? internalMode;
@@ -236,6 +255,7 @@ export function ProfileView({
         onClose={() => setMode('view')}
         supabaseClient={supabaseClient ?? null}
         onAvatarUpdated={onAvatarUpdated}
+        onRegisterSave={onRegisterSave}
       />
     );
   }
@@ -556,12 +576,14 @@ function ProfileEditPanel({
   onClose,
   supabaseClient,
   onAvatarUpdated,
+  onRegisterSave,
 }: {
   user: User;
   onUpdateUser: (user: Partial<User>) => void;
   onClose: () => void;
   supabaseClient?: SupabaseClient | null;
   onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
+  onRegisterSave?: (handler: (() => void) | null) => void;
 }) {
   const defaultHandle = user.handle ?? user.name.toLowerCase().replace(/\s+/g, '');
   const [name, setName] = React.useState(user.name);
@@ -599,13 +621,23 @@ function ProfileEditPanel({
           .join('\n')
       : ''
   );
+  const [producerLabels, setProducerLabels] = React.useState<ProducerLabelDetail[]>([]);
+  const [producerLabelInput, setProducerLabelInput] = React.useState('');
+  const [producerLabelDescription, setProducerLabelDescription] = React.useState('');
+  const [producerLabelYear, setProducerLabelYear] = React.useState('');
+  const [producerLabelsLoading, setProducerLabelsLoading] = React.useState(false);
+  const [producerLabelsLoaded, setProducerLabelsLoaded] = React.useState(false);
+  const [producerLabelsDirty, setProducerLabelsDirty] = React.useState(false);
   const [legalName, setLegalName] = React.useState(user.legalEntity?.legalName ?? '');
   const [siret, setSiret] = React.useState(user.legalEntity?.siret ?? '');
   const [vatNumber, setVatNumber] = React.useState(user.legalEntity?.vatNumber ?? '');
-  const [legalEntityType, setLegalEntityType] =
-    React.useState<'company' | 'association' | 'public_institution'>(
-      (user.legalEntity?.entityType as any) ?? 'company'
-    );
+  const [producerCategory, setProducerCategory] = React.useState(
+    user.legalEntity?.producerCategory ?? ''
+  );
+  const [iban, setIban] = React.useState(user.legalEntity?.iban ?? '');
+  const [accountHolderName, setAccountHolderName] = React.useState(
+    user.legalEntity?.accountHolderName ?? ''
+  );
   const [deliveryLeadType, setDeliveryLeadType] = React.useState<DeliveryLeadType>(
     user.legalEntity?.deliveryLeadType ?? 'days'
   );
@@ -663,7 +695,160 @@ function ProfileEditPanel({
     setter((prev) => (prev.includes(day) ? prev.filter((value) => value !== day) : [...prev, day]));
   };
 
-  const handleSave = () => {
+  const normalizeLabelValue = (value: string) => value.trim().toLowerCase();
+  const parseProducerLabelYear = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) return null;
+    return Math.trunc(parsed);
+  };
+  const parseProducerLabelYearValue = (value: unknown) => {
+    if (value === null || value === undefined) return undefined;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return undefined;
+      const parsed = Number(trimmed);
+      return Number.isFinite(parsed) ? Math.trunc(parsed) : undefined;
+    }
+    return undefined;
+  };
+  const handleProducerLabelKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    handleAddProducerLabel();
+  };
+
+  const handleAddProducerLabel = () => {
+    const nextLabel = producerLabelInput.trim();
+    if (!nextLabel) return;
+    const normalized = normalizeLabelValue(nextLabel);
+    const parsedYear = parseProducerLabelYear(producerLabelYear);
+    if (parsedYear === null) {
+      toast.error("Annee d'obtention invalide.");
+      return;
+    }
+    const nextDescription = producerLabelDescription.trim();
+    setProducerLabels((prev) => {
+      if (prev.some((label) => normalizeLabelValue(label.label) === normalized)) return prev;
+      return [
+        ...prev,
+        {
+          label: nextLabel,
+          description: nextDescription || undefined,
+          obtentionYear: parsedYear,
+        },
+      ];
+    });
+    setProducerLabelInput('');
+    setProducerLabelDescription('');
+    setProducerLabelYear('');
+    setProducerLabelsDirty(true);
+  };
+
+  const handleRemoveProducerLabel = (label: string) => {
+    setProducerLabels((prev) => prev.filter((item) => item.label !== label));
+    setProducerLabelsDirty(true);
+  };
+
+  React.useEffect(() => {
+    let isActive = true;
+    if (role !== 'producer' || !supabaseClient) {
+      setProducerLabelsLoading(false);
+      setProducerLabelsLoaded(false);
+      return () => {
+        isActive = false;
+      };
+    }
+
+    const loadProducerLabels = async () => {
+      setProducerLabelsLoading(true);
+      setProducerLabelsLoaded(false);
+      try {
+        const { data, error } = await supabaseClient
+          .from(PRODUCER_LABELS_TABLE)
+          .select('*')
+          .eq('profile_id', user.id)
+          .order('label', { ascending: true });
+
+        if (!isActive) return;
+        if (error) {
+          toast.error("Impossible de charger les labels d'exploitation.");
+          return;
+        }
+        const nextLabels = (data ?? [])
+          .map((row) => {
+            const record = row as Record<string, unknown>;
+            const labelValue = typeof record.label === 'string' ? record.label.trim() : '';
+            if (!labelValue) return null;
+            const descriptionValue = record[PRODUCER_LABELS_DESCRIPTION_COLUMN];
+            const description =
+              typeof descriptionValue === 'string'
+                ? descriptionValue.trim()
+                : typeof record.description === 'string'
+                  ? record.description.trim()
+                  : undefined;
+            const yearValue = record[PRODUCER_LABELS_YEAR_COLUMN];
+            const obtentionYear = parseProducerLabelYearValue(yearValue);
+            return {
+              label: labelValue,
+              description: description || undefined,
+              obtentionYear,
+            } as ProducerLabelDetail;
+          })
+          .filter(Boolean) as ProducerLabelDetail[];
+        setProducerLabels(nextLabels);
+        setProducerLabelsLoaded(true);
+        setProducerLabelsDirty(false);
+      } finally {
+        if (isActive) setProducerLabelsLoading(false);
+      }
+    };
+
+    void loadProducerLabels();
+
+    return () => {
+      isActive = false;
+    };
+  }, [role, supabaseClient, user.id]);
+
+  const saveProducerLabels = async () => {
+    if (!supabaseClient || role !== 'producer') return true;
+    if (!producerLabelsLoaded && !producerLabelsDirty) return true;
+    const cleaned = producerLabels
+      .map((entry) => ({
+        label: entry.label.trim(),
+        description: entry.description?.trim() || null,
+        obtentionYear: entry.obtentionYear ?? null,
+      }))
+      .filter((entry) => entry.label);
+    const { error: deleteError } = await supabaseClient
+      .from(PRODUCER_LABELS_TABLE)
+      .delete()
+      .eq('profile_id', user.id);
+    if (deleteError) {
+      toast.error("Mise a jour des labels d'exploitation impossible.");
+      return false;
+    }
+    if (cleaned.length) {
+      const rows = cleaned.map((entry) => ({
+        profile_id: user.id,
+        label: entry.label,
+        [PRODUCER_LABELS_DESCRIPTION_COLUMN]: entry.description,
+        [PRODUCER_LABELS_YEAR_COLUMN]: entry.obtentionYear,
+      }));
+      const { error: insertError } = await supabaseClient.from(PRODUCER_LABELS_TABLE).insert(rows);
+      if (insertError) {
+        toast.error("Mise a jour des labels d'exploitation impossible.");
+        return false;
+      }
+    }
+    setProducerLabelsDirty(false);
+    return true;
+  };
+
+  const handleSave = async () => {
     const hasAddress = Boolean(address.trim() && city.trim() && postcode.trim());
     const hasIdentity = Boolean(user.verified);
     const hasLegalInfo = accountType !== 'individual' && Boolean(legalName.trim() && siret.trim());
@@ -710,7 +895,10 @@ function ProfileEditPanel({
             legalName: legalName.trim(),
             siret: siret.trim(),
             vatNumber: vatNumber.trim() || undefined,
-            entityType: (legalEntityType as 'company' | 'association' | 'public_institution') ?? 'company',
+            entityType: accountType as 'company' | 'association' | 'public_institution',
+            producerCategory: producerCategory.trim() || undefined,
+            iban: iban.trim() || undefined,
+            accountHolderName: accountHolderName.trim() || undefined,
             ...deliveryLeadPayload,
             chronofreshEnabled,
             chronofreshMinWeight: chronofreshEnabled ? normalizeWeight(chronofreshMinWeight) : undefined,
@@ -728,6 +916,8 @@ function ProfileEditPanel({
           }
         : undefined;
 
+    const labelsSaved = await saveProducerLabels();
+    if (!labelsSaved) return;
     onUpdateUser({
       name: name.trim() || user.name,
       address: address.trim(),
@@ -753,6 +943,21 @@ function ProfileEditPanel({
     onClose();
   };
 
+  const handleSaveRef = React.useRef(handleSave);
+
+  React.useEffect(() => {
+    handleSaveRef.current = handleSave;
+  }, [handleSave]);
+
+  React.useEffect(() => {
+    if (!onRegisterSave) return;
+    const handler = () => handleSaveRef.current();
+    onRegisterSave(handler);
+    return () => {
+      onRegisterSave(null);
+    };
+  }, [onRegisterSave]);
+
   return (
     <div className="space-y-6 pb-12">
       <div className="profile-edit-header flex items-center justify-between">
@@ -764,7 +969,7 @@ function ProfileEditPanel({
           onClick={onClose}
           className="px-3 py-1 rounded-lg border border-gray-200 text-[#1F2937] hover:border-[#FF6B4A]"
         >
-          Retour
+          Retour sans enregistrer
         </button>
       </div>
 
@@ -835,7 +1040,7 @@ function ProfileEditPanel({
                     placeholder="votrepseudo"
                   />
                 </div>
-                <p className="text-xs text-[#9CA3AF]">Utilise pour le lien du profil.</p>
+                <p className="text-xs text-[#9CA3AF]">Utile pour le lien du profil.</p>
               </div>
               <div>
                 <label className="block text-sm text-[#6B7280]">Bio / phrase</label>
@@ -848,7 +1053,7 @@ function ProfileEditPanel({
                 />
               </div>
               <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">VisibilitǸ du profil</label>
+                <label className="block text-sm text-[#6B7280]">Visibilité du profil</label>
                 <div className="profile-visibility-group flex items-center gap-2">
                   <VisibilityButton
                     label="Public"
@@ -863,10 +1068,10 @@ function ProfileEditPanel({
                     onClick={() => setProfileVisibility('private')}
                   />
                 </div>
-                <p className="text-xs text-[#9CA3AF]">Le mode prive limite la visibilitǸ de votre profil et de vos informations.</p>
+                <p className="text-xs text-[#9CA3AF]">Le mode privé limite la visibilité de votre profil et de vos informations.</p>
                 {!user.verified && (
                   <button className="w-full py-2 bg-[#28C1A5] text-white rounded-lg hover:bg-[#23A88F] transition-colors">
-                    Verifier mon identitǸ
+                    Verifier mon identité
                   </button>
                 )}
               </div>
@@ -887,74 +1092,11 @@ function ProfileEditPanel({
           </div>
         </section>
 
-        <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="text-[#1F2937] font-semibold">Role et type de compte</h3>
-            <p className="text-xs text-[#6B7280]">Choisissez le role pour debloquer les actions correspondantes.</p>
-          </div>
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <div className="xl:col-span-2 space-y-3">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <RoleButton label="Participant" active={role === 'participant'} onClick={() => setRole('participant')} />
-                <RoleButton
-                  label="Partageur"
-                  active={role === 'sharer'}
-                  disabled={!(user.verified && address.trim() && city.trim() && postcode.trim())}
-                  onClick={() => {
-                    if (user.verified && address.trim() && city.trim() && postcode.trim()) setRole('sharer');
-                  }}
-                  hint="Vérifiez votre identité et complétez votre adresse pour passer partageur."
-                />
-                <RoleButton
-                  label="Producteur"
-                  active={role === 'producer'}
-                  disabled={accountType === 'individual' || !legalName.trim() || !siret.trim()}
-                  onClick={() => {
-                    if (accountType !== 'individual' && legalName.trim() && siret.trim()) setRole('producer');
-                  }}
-                  hint="Renseignez votre entreprise (type != particulier, raison sociale et SIRET)."
-                />
-              </div>
-              <p className="text-xs text-[#9CA3AF]">
-                Partageur: identité vérifiée + adresse complète. Producteur: compte non particulier avec raison sociale et SIRET.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <label className="block text-sm text-[#6B7280]">Type de compte</label>
-              <select
-                value={accountType}
-                onChange={(e) =>
-                  setAccountType(
-                    (e.target.value as 'individual' | 'company' | 'association' | 'public_institution') ?? 'individual'
-                  )
-                }
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-              >
-                <option value="individual">Particulier</option>
-                <option value="company">Entreprise</option>
-                <option value="association">Association</option>
-                <option value="public_institution">Collectivité / service public</option>
-              </select>
-              <p className="text-xs text-[#9CA3AF]">Determine si les sections entreprise sont affichees.</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <label className="flex items-center gap-2 text-sm text-[#374151]">
-              <input
-                type="checkbox"
-                checked={freshProductsCertified}
-                onChange={(e) => setFreshProductsCertified(e.target.checked)}
-                className="rounded border-gray-300 text-[#FF6B4A] focus:ring-[#FF6B4A]"
-              />
-              Habilitation a partager des produits frais
-            </label>
-          </div>
-        </section>
 
         <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="text-[#1F2937] font-semibold">Coordonnees obligatoires</h3>
-            <p className="text-xs text-[#6B7280]">Pour sécuriser les echanges et votre visibilité locale.</p>
+            <h3 className="text-[#1F2937] font-semibold">Coordonnées obligatoires</h3>
+            <p className="text-xs text-[#6B7280]">Pour sécuriser le fonctionnement de la plateforme.</p>
           </div>
           <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
             <p className="text-sm font-semibold text-[#1F2937]">Confirmez vos coordonnees</p>
@@ -1046,6 +1188,142 @@ function ProfileEditPanel({
           </div>
         </section>
 
+        <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="text-[#1F2937] font-semibold">Type de compte</h3>
+            <p className="text-xs text-[#6B7280]">Si vous souhaitez devenir partageur ou utiliser la plateforme de manière professionnelle.</p>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <div className="xl:col-span-2 space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <RoleButton label="Participant" active={role === 'participant'} onClick={() => setRole('participant')} />
+                <RoleButton
+                  label="Partageur"
+                  active={role === 'sharer'}
+                  disabled={!(user.verified && address.trim() && city.trim() && postcode.trim())}
+                  onClick={() => {
+                    if (user.verified && address.trim() && city.trim() && postcode.trim()) setRole('sharer');
+                  }}
+                  hint="Vérifiez votre identité et complétez votre adresse pour pouvoir passer partageur."
+                />
+                <RoleButton
+                  label="Producteur"
+                  active={role === 'producer'}
+                  disabled={accountType === 'individual' || !legalName.trim() || !siret.trim()}
+                  onClick={() => {
+                    if (accountType !== 'individual' && legalName.trim() && siret.trim()) setRole('producer');
+                  }}
+                  hint="Renseignez votre entreprise (type != particulier, raison sociale et SIRET)."
+                />
+              </div>
+              <p className="text-xs text-[#9CA3AF]">
+                Partageur: identité vérifiée + adresse complète. Producteur: compte non particulier avec raison sociale et SIRET.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm text-[#6B7280]">Type de compte</label>
+              <select
+                value={accountType}
+                onChange={(e) =>
+                  setAccountType(
+                    (e.target.value as 'individual' | 'company' | 'association' | 'public_institution') ?? 'individual'
+                  )
+                }
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+              >
+                <option value="individual">Particulier</option>
+                <option value="company">Auto-entreprise</option>
+                <option value="company">Entreprise</option>
+                <option value="association">Association</option>
+                <option value="public_institution">Autre</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="flex items-center gap-2 text-sm text-[#374151]">
+              <input
+                type="checkbox"
+                checked={freshProductsCertified}
+                onChange={(e) => setFreshProductsCertified(e.target.checked)}
+                className="rounded border-gray-300 text-[#FF6B4A] focus:ring-[#FF6B4A]"
+              />
+              Habilitation a partager des produits frais
+            </label>
+          </div>
+        </section>
+
+        {accountType !== 'individual' && (
+          <section className="rounded-2xl border border-[#D7E3FF] bg-[#F6F8FF] p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Informations légales</h3>
+              <span className="text-xs text-[#6B7280]">Ces informations doivent être complétées si vous utilisez la plateforme de manière professionnelle</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-sm text-[#6B7280]">Raison sociale</label>
+                <input
+                  type="text"
+                  value={legalName}
+                  onChange={(e) => setLegalName(e.target.value)}
+                  placeholder="Votre entreprise"
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-[#6B7280]">SIRET</label>
+                <input
+                  type="text"
+                  value={siret}
+                  onChange={(e) => setSiret(e.target.value)}
+                  placeholder="123 456 789 00012"
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                />
+              </div>
+              {role === 'producer' && (
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Catégorie de producteur</label>
+                  <select
+                    value={producerCategory}
+                    onChange={(e) => setProducerCategory(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  >
+                    <option value="">Sélectionner une categorie</option>
+                    {producerCategoryOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              
+            </div>
+            <div className='grid md:grid-cols-1 lg:grid-cols-2 gap-3'>
+                <label className="block text-sm text-[#6B7280]">RIB</label>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Identité du compte</label>
+                  <input
+                    type="text"
+                    value={accountHolderName}
+                    onChange={(e) => setAccountHolderName(e.target.value)}
+                    placeholder="Nom du titulaire"
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">IBAN</label>
+                  <input
+                    type="text"
+                    value={iban}
+                    onChange={(e) => setIban(e.target.value)}
+                    placeholder="FR76...."
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+              </div>
+          </section>
+        )}
+
         <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-3 rounded-xl bg-[#F9FAFB] p-4 border border-gray-200">
@@ -1135,11 +1413,102 @@ function ProfileEditPanel({
         </section>
 
         {role === 'producer' && (
+          <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Labels d'exploitation</h3>
+              <span className="text-xs text-[#6B7280]">
+                Affiches dans l'onglet Qualite de tous vos produits.
+              </span>
+            </div>
+            {producerLabelsLoading ? (
+              <p className="text-xs text-[#6B7280]">Chargement des labels...</p>
+            ) : producerLabels.length ? (
+              <div className="flex flex-wrap gap-3">
+                {producerLabels.map((entry) => (
+                  <div
+                    key={entry.label}
+                    className="flex flex-col gap-1 rounded-xl border border-[#FFE0D1] bg-[#FFF1E6] px-3 py-2 text-xs text-[#B45309]"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold">{entry.label}</span>
+                      {entry.obtentionYear ? (
+                        <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] text-[#B45309]">
+                          {entry.obtentionYear}
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveProducerLabel(entry.label)}
+                        className="ml-auto rounded-full border border-[#FBD0B8] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#B45309] hover:text-[#FF6B4A]"
+                        aria-label={`Retirer le label ${entry.label}`}
+                      >
+                        Retirer
+                      </button>
+                    </div>
+                    {entry.description ? (
+                      <span className="text-[11px] text-[#8C5A2B]">{entry.description}</span>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[#6B7280]">Aucun label d'exploitation pour l'instant.</p>
+            )}
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              <input
+                type="text"
+                value={producerLabelInput}
+                onChange={(e) => setProducerLabelInput(e.target.value)}
+                onKeyDown={handleProducerLabelKeyDown}
+                placeholder="Nom du label"
+                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+              />
+              <input
+                type="text"
+                value={producerLabelDescription}
+                onChange={(e) => setProducerLabelDescription(e.target.value)}
+                onKeyDown={handleProducerLabelKeyDown}
+                placeholder="Description (optionnel)"
+                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+              />
+              <input
+                type="number"
+                value={producerLabelYear}
+                onChange={(e) => setProducerLabelYear(e.target.value)}
+                onKeyDown={handleProducerLabelKeyDown}
+                placeholder="Annee d'obtention"
+                min="1900"
+                max="2100"
+                step="1"
+                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+              />
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleAddProducerLabel}
+                disabled={!producerLabelInput.trim()}
+                className={`px-4 py-2 rounded-lg border border-[#FF6B4A] text-[#FF6B4A] font-semibold hover:bg-[#FFF1E6] ${
+                  producerLabelInput.trim() ? '' : 'opacity-60 cursor-not-allowed'
+                }`}
+              >
+                Ajouter
+              </button>
+            </div>
+            {!supabaseClient && (
+              <p className="text-xs text-[#9CA3AF]">
+                Supabase non configure : les labels ne seront pas sauvegardes.
+              </p>
+            )}
+          </section>
+        )}
+
+        {role === 'producer' && (
           <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-[#1F2937] font-semibold">Reglages producteur - Livraison</h3>
               <span className="text-xs text-[#6B7280]">
-                Definissez les options proposees aux partageurs et les seuils de poids.
+                Définissez les options proposées aux partageurs pour la livraison et les seuils de poids minimum et maximum.
               </span>
             </div>
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -1150,11 +1519,11 @@ function ProfileEditPanel({
                     checked={chronofreshEnabled}
                     onChange={(e) => setChronofreshEnabled(e.target.checked)}
                   />
-                  Expedition Chronofresh
+                  Expédition Chronofresh
                 </label>
-                <p className="text-xs text-[#6B7280]">Option geree par le site.</p>
+                <p className="text-xs text-[#6B7280]">Option gérée par le site : les frais de livraison sont répartis entre ls participants à la commande.</p>
                 <div className="space-y-2">
-                  <label className="block text-xs text-[#6B7280]">Delai de livraison apres cloture (Chronofresh)</label>
+                  <label className="block text-xs text-[#6B7280]">indiquez dans quel délai vous vous engagez à avoir livré la commande apres clôture de celle-ci (Chronofresh prend en moyenne 24h pour livrer à partir du moment où il a récupéré la commande)</label>
                   <select
                     value={deliveryLeadType === 'fixed_day' ? 'fixed_day' : `days-${deliveryLeadDays}`}
                     onChange={(e) => {
@@ -1360,62 +1729,6 @@ function ProfileEditPanel({
           </section>
         )}
 
-        {accountType !== 'individual' && (
-          <section className="rounded-2xl border border-[#D7E3FF] bg-[#F6F8FF] p-4 space-y-4 shadow-sm">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="text-[#1F2937] font-semibold">Informations légales</h3>
-              <span className="text-xs text-[#6B7280]">Visible pour les comptes entreprise / association / public</span>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div>
-                <label className="block text-sm text-[#6B7280]">Raison sociale</label>
-                <input
-                  type="text"
-                  value={legalName}
-                  onChange={(e) => setLegalName(e.target.value)}
-                  placeholder="Votre entreprise"
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-[#6B7280]">SIRET</label>
-                <input
-                  type="text"
-                  value={siret}
-                  onChange={(e) => setSiret(e.target.value)}
-                  placeholder="123 456 789 00012"
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-[#6B7280]">TVA (optionnel)</label>
-                <input
-                  type="text"
-                  value={vatNumber}
-                  onChange={(e) => setVatNumber(e.target.value)}
-                  placeholder="FRXX999999999"
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-[#6B7280]">Type de structure</label>
-                <select
-                  value={legalEntityType}
-                  onChange={(e) =>
-                    setLegalEntityType(
-                      (e.target.value as 'company' | 'association' | 'public_institution') ?? 'company'
-                    )
-                  }
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                >
-                  <option value="company">Entreprise</option>
-                  <option value="association">Association</option>
-                  <option value="public_institution">Collectivité / service public</option>
-                </select>
-              </div>
-            </div>
-          </section>
-        )}
       </div>
 
     </div>

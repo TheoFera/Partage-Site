@@ -59,6 +59,7 @@ interface MapViewProps {
   deck: DeckCard[];
   onAddToDeck?: (product: Product) => void;
   onRemoveFromDeck: (productId: string) => void;
+  onOpenProduct?: (productId: string) => void;
   onOpenOrder: (orderId: string) => void;
   onOpenProducer: (product: Product) => void;
   onOpenSharer: (sharerName: string) => void;
@@ -101,6 +102,7 @@ export function MapView({
   deck,
   onAddToDeck,
   onRemoveFromDeck,
+  onOpenProduct,
   onOpenOrder,
   onOpenProducer,
   onOpenSharer,
@@ -563,7 +565,7 @@ export function MapView({
                           onRemoveFromDeck={onRemoveFromDeck}
                           onToggleSelection={toggleSelection}
                           onCreateOrder={undefined}
-                          onOpenProduct={() => {}}
+                          onOpenProduct={(productId) => onOpenProduct?.(productId)}
                           onOpenOrder={onOpenOrder}
                           onOpenProducer={onOpenProducer}
                           onOpenSharer={onOpenSharer}
@@ -681,7 +683,7 @@ export function MapView({
                             onRemoveFromDeck={onRemoveFromDeck}
                             onToggleSelection={toggleSelection}
                             onCreateOrder={undefined}
-                            onOpenProduct={() => {}}
+                            onOpenProduct={(productId) => onOpenProduct?.(productId)}
                             onOpenOrder={onOpenOrder}
                             onOpenProducer={onOpenProducer}
                             onOpenSharer={onOpenSharer}
@@ -708,7 +710,7 @@ export function MapView({
                             onRemoveFromDeck={onRemoveFromDeck}
                             onToggleSelection={toggleSelection}
                             onCreateOrder={undefined}
-                            onOpenProduct={() => {}}
+                            onOpenProduct={(productId) => onOpenProduct?.(productId)}
                             onOpenOrder={onOpenOrder}
                             onOpenProducer={onOpenProducer}
                             onOpenSharer={onOpenSharer}
