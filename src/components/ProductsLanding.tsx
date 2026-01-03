@@ -104,7 +104,7 @@ const heroCategoryFilters = [
   {
     id: 'epicerie',
     label: 'Epicerie',
-    icon: '🛒',
+    icon: '🍯',
     filters: ['epicerie-sucree', 'epicerie-salee'],
   },
   {
