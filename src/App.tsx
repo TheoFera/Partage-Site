@@ -36,6 +36,7 @@ import {
   OrderPurchaseDraft,
 } from './types';
 import { getSupabaseClient } from './lib/supabaseClient';
+import { eurosToCents, formatEurosFromCents } from './lib/money';
 import { DEMO_MODE, getLotByCode, getProductByCode, listProducts } from './data/productsProvider';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
@@ -272,6 +273,23 @@ const normalizeText = (value: string) =>
     .toLowerCase();
 
 const slugify = (value: string) => normalizeText(value).replace(/[^a-z0-9]+/g, '-');
+const normalizeLabelKey = (value?: string | null) => (value ?? '').trim().toLowerCase();
+const DB_PRODUCT_CATEGORIES = [
+  'Fruits & Legumes',
+  'Poissons & Fruits de mer',
+  'Viandes',
+  'Charcuteries',
+  'Traiteurs',
+  'Fromages & Cremerie',
+  'Epicerie Sucree',
+  'Epicerie Salee',
+  'Boissons',
+  'Beaute & Bien-etre',
+];
+const resolveDbCategory = (value: string) => {
+  const normalized = normalizeText(value);
+  return DB_PRODUCT_CATEGORIES.find((entry) => normalizeText(entry) === normalized) ?? null;
+};
 
 const getProductAttributes = (product: Product) => {
   const normalized = normalizeText(`${product.name} ${product.description}`);
@@ -737,12 +755,12 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
   onRemoveFromDeck,
   onShareProduct,
 }) => {
-  const params = useParams<{ id?: string; slugAndCode?: string; lot_code?: string }>();
+  const params = useParams<{ id?: string; slugAndCode?: string; lotCode?: string }>();
   const navigate = useNavigate();
   const productCode = params.slugAndCode
     ? parseSlugAndCode(params.slugAndCode).productCode
     : params.id ?? null;
-  const lotCode = params.lot_code ?? null;
+  const lotCode = params.lotCode ?? null;
   const [product, setProduct] = React.useState<Product | null>(null);
   const [detail, setDetail] = React.useState<ProductDetail | null>(null);
   const [activeLotCode, setActiveLotCode] = React.useState<string | null>(null);
@@ -761,6 +779,11 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
   );
 
   const inDeck = Boolean(product && deck.some((card) => card.id === product.id));
+  const buildLotPath = React.useCallback((target: Product, code: string) => {
+    const slug = target.slug ?? slugify(target.name);
+    const productCodeValue = target.productCode ?? target.id;
+    return `/produits/${slug || 'produit'}-${productCodeValue}/lot/${code}`;
+  }, []);
 
   const handleParticipate = React.useCallback(() => {
     if (!product) return;
@@ -809,8 +832,8 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
         return;
       }
       const result = lotCode
-        ? await getLotByCode(lotCode, useDemoProducts)
-        : await getProductByCode(productCode, useDemoProducts);
+        ? await getLotByCode(lotCode)
+        : await getProductByCode(productCode);
       if (!active) return;
       if (!result) {
         setProduct(null);
@@ -835,6 +858,11 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
       active = false;
     };
   }, [createdProductDetails, lotCode, productCode, products, useDemoProducts]);
+
+  React.useEffect(() => {
+    if (!product || lotCode || !activeLotCode) return;
+    navigate(buildLotPath(product, activeLotCode), { replace: true });
+  }, [activeLotCode, buildLotPath, lotCode, navigate, product]);
 
   React.useEffect(() => {
     let active = true;
@@ -885,7 +913,7 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     return <NotFound message="Produit introuvable." />;
   }
 
-  if (!detail.productions?.length) {
+  if (!detail.productions?.length && !isOwner) {
     return <NotFound message="Produit non disponible." />;
   }
 
@@ -936,10 +964,10 @@ export default function App() {
     }
   }, []);
   const [user, setUser] = React.useState<User | null>(null);
-  const [products, setProducts] = React.useState<Product[]>(mockProducts);
+  const [products, setProducts] = React.useState<Product[]>(DEMO_MODE ? mockProducts : []);
   const [createdProductDetails, setCreatedProductDetails] = React.useState<Record<string, ProductDetail>>({});
   const [useDemoProducts, setUseDemoProducts] = React.useState<boolean>(DEMO_MODE);
-  const [groupOrders, setGroupOrders] = React.useState<GroupOrder[]>(mockGroupOrders);
+  const [groupOrders, setGroupOrders] = React.useState<GroupOrder[]>(DEMO_MODE ? mockGroupOrders : []);
   const [deck, setDeck] = React.useState<DeckCard[]>([]);
   const [orderBuilderProducts, setOrderBuilderProducts] = React.useState<DeckCard[] | null>(null);
   const [orderBuilderSelection, setOrderBuilderSelection] = React.useState<string[] | null>(null);
@@ -970,8 +998,8 @@ export default function App() {
       .catch((error) => {
         console.warn('Products listing error:', error);
         if (!active) return;
-        setProducts(mockProducts);
-        setUseDemoProducts(true);
+        setProducts(DEMO_MODE ? mockProducts : []);
+        setUseDemoProducts(DEMO_MODE);
       });
     return () => {
       active = false;
@@ -1048,24 +1076,33 @@ export default function App() {
     if (typeof window === 'undefined') return path;
     return `${window.location.origin}${path}`;
   }, []);
-  const getProductPath = React.useCallback((product: Product) => {
+  const getProductPath = React.useCallback((product: Product, lotCodeOverride?: string | null) => {
     const code = product.productCode ?? product.id;
     const slug = product.slug ?? slugify(product.name);
+    const lotSegment = lotCodeOverride || product.activeLotCode;
+    if (lotSegment) {
+      return `/produits/${slug || 'produit'}-${code}/lot/${lotSegment}`;
+    }
     return `/produits/${slug || 'produit'}-${code}`;
   }, []);
   const buildProductSharePayload = React.useCallback(
-    (product: Product) => ({
-      link: getAbsoluteLink(getProductPath(product)),
-      title: product.name,
-      subtitle: `${product.producerName} - ${product.price.toFixed(2)} € / ${product.unit}`,
-      description:
-        'Scannez pour decouvrir tous les details du produit, son lieu de production et la repartition de la valeur.',
-      details: [
-        { label: 'Origine', value: product.producerLocation || 'Origine locale' },
-        { label: 'Categorie', value: product.category },
-        { label: 'Disponibilite', value: product.inStock ? 'Disponible' : 'Bientot disponible' },
-      ],
-    }),
+    (product: Product) => {
+      const hasPrice = Boolean(product.activeLotCode) && product.price > 0;
+      const priceLabel = hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix a venir';
+      const unitLabel = hasPrice ? ` / ${product.unit}` : '';
+      return {
+        link: getAbsoluteLink(getProductPath(product)),
+        title: product.name,
+        subtitle: `${product.producerName} - ${priceLabel}${unitLabel}`,
+        description:
+          'Scannez pour decouvrir tous les details du produit, son lieu de production et la repartition de la valeur.',
+        details: [
+          { label: 'Origine', value: product.producerLocation || 'Origine locale' },
+          { label: 'Categorie', value: product.category },
+          { label: 'Disponibilite', value: product.inStock ? 'Disponible' : 'Bientot disponible' },
+        ],
+      };
+    },
     [getAbsoluteLink, getProductPath]
   );
   const buildOrderSharePayload = React.useCallback(
@@ -1124,7 +1161,6 @@ export default function App() {
   );
   const openShareOverlay = React.useCallback(
     (payload: { link: string; title: string; subtitle?: string; description?: string; details?: { label: string; value: string }[] }) => {
-      console.log('openShareOverlay', payload);
       setShareOverlay({ open: true, ...payload });
     },
     []
@@ -1799,25 +1835,286 @@ export default function App() {
       return;
     }
     const productCode = payload.product.productCode ?? `product-${Date.now()}`;
-    const newProduct: Product = {
-      ...payload.product,
-      productCode,
-      id: productCode,
-    };
-    setProducts([newProduct, ...products]);
-    setCreatedProductDetails((prev) => ({
-      ...prev,
-      [productCode]: {
-        ...payload.detail,
-        productId: productCode,
-        name: newProduct.name,
-        category: newProduct.category,
-      },
-    }));
-    toast.success('Produit ajoute avec succes !');
-    setProfileMode('view');
     const targetProfilePath = user.handle ? `/profil/${user.handle}` : tabRoutes.profile;
-    navigate(targetProfilePath);
+
+    const finalizeCreate = (nextProduct: Product, nextDetail: ProductDetail) => {
+      const productKey = nextProduct.productCode ?? nextProduct.id;
+      setProducts((prev) => [nextProduct, ...prev]);
+      setCreatedProductDetails((prev) => ({
+        ...prev,
+        [productKey]: {
+          ...nextDetail,
+          productId: productKey,
+          name: nextProduct.name,
+          category: nextProduct.category,
+        },
+      }));
+      toast.success('Produit ajoute avec succes !');
+      setProfileMode('view');
+      navigate(targetProfilePath);
+    };
+
+    const measurement = payload.product.measurement ?? 'kg';
+    const saleUnit = measurement === 'kg' ? 'kg' : 'unit';
+    const packaging =
+      (payload.product.unit || payload.detail.conditionnementPrincipal || (saleUnit === 'kg' ? 'kg' : 'piece')).trim();
+    const producerProfileId =
+      [payload.product.producerId, user.producerId, user.id].find(isUuid) ?? null;
+    const dbCategory = resolveDbCategory(payload.product.category);
+    if (!dbCategory) {
+      toast.error("Categorie non prise en charge par la base.");
+      return;
+    }
+
+    if (!supabaseClient || DEMO_MODE) {
+      const fallbackProduct: Product = {
+        id: productCode,
+        productCode,
+        slug: payload.product.slug ?? slugify(payload.product.name || productCode),
+        name: payload.product.name,
+        description: payload.product.description ?? '',
+        price: 0,
+        unit: packaging || (saleUnit === 'kg' ? 'kg' : 'piece'),
+        quantity: 0,
+        category: payload.product.category,
+        imageUrl: payload.product.imageUrl ?? '',
+        producerId: producerProfileId ?? payload.product.producerId ?? productCode,
+        producerName: payload.product.producerName,
+        producerLocation: payload.product.producerLocation,
+        inStock: false,
+        measurement,
+        weightKg: payload.product.weightKg,
+      };
+      finalizeCreate(fallbackProduct, payload.detail);
+      return;
+    }
+
+    void (async () => {
+      try {
+        const PRODUCT_IMAGE_BUCKET = 'product-images';
+        const JOURNEY_IMAGE_BUCKET = import.meta.env.VITE_PRODUCT_JOURNEY_BUCKET ?? 'product-journey';
+        const description = payload.product.description?.trim() || null;
+        const producerName = payload.product.producerName?.trim() || user.name || null;
+        const producerLocation = payload.product.producerLocation?.trim() || user.city || null;
+
+        const { data: createdProduct, error: createError } = await supabaseClient
+          .from('products')
+          .insert({
+            product_code: productCode,
+            slug: payload.product.slug ?? slugify(payload.product.name || productCode),
+            name: payload.product.name,
+            sale_unit: saleUnit,
+            packaging: packaging || (saleUnit === 'kg' ? 'kg' : 'piece'),
+            unit_weight_kg: payload.product.weightKg ?? null,
+            description,
+            category: dbCategory,
+            conservation_method: payload.detail.conservationMode ?? null,
+            conservation_detail: payload.detail.compositionEtiquette?.conservationDetaillee ?? null,
+            conservation_after_opening: payload.detail.compositionEtiquette?.conseilsUtilisation ?? null,
+            default_price_cents: null,
+            producer_profile_id: producerProfileId,
+            producer_name: producerName,
+            producer_location: producerLocation,
+            is_active: true,
+          })
+          .select('id, product_code')
+          .maybeSingle();
+
+        if (createError || !createdProduct?.id) {
+          throw createError ?? new Error('Erreur creation produit.');
+        }
+
+        const productId = createdProduct.id as string;
+        let primaryImageUrl = payload.product.imageUrl?.trim() || '';
+
+        if (payload.imageFile) {
+          const file = payload.imageFile;
+          const fileType = file.type || 'image/webp';
+          const extension = fileType.split('/')[1] || 'webp';
+          const targetPath = `${productId}/product-${Date.now()}.${extension}`;
+          const { error: uploadError } = await supabaseClient.storage
+            .from(PRODUCT_IMAGE_BUCKET)
+            .upload(targetPath, file, {
+              upsert: false,
+              contentType: fileType,
+              cacheControl: '3600',
+            });
+          if (uploadError) {
+            throw uploadError;
+          }
+
+          const altText = payload.detail.productImage?.alt ?? payload.product.name;
+          const { error: imageError } = await supabaseClient.from('product_images').insert({
+            product_id: productId,
+            path: targetPath,
+            alt: altText || null,
+            sort_order: 0,
+            is_primary: true,
+          });
+          if (imageError) {
+            throw imageError;
+          }
+
+          const { data: publicData } = supabaseClient.storage
+            .from(PRODUCT_IMAGE_BUCKET)
+            .getPublicUrl(targetPath);
+          if (publicData?.publicUrl) {
+            primaryImageUrl = publicData.publicUrl;
+          }
+        }
+
+        const ingredientRows = (payload.detail.compositionEtiquette?.ingredients ?? [])
+          .map((ingredient) => {
+            const name = ingredient.nom?.trim();
+            if (!name) return null;
+            return {
+              product_id: productId,
+              name,
+              is_allergen: Boolean(ingredient.isAllergen),
+              allergen_type: ingredient.isAllergen
+                ? (ingredient.allergenType || name).trim() || null
+                : null,
+            };
+          })
+          .filter(Boolean) as Array<Record<string, unknown>>;
+        if (ingredientRows.length) {
+          const { error: ingredientError } = await supabaseClient
+            .from('product_ingredients')
+            .insert(ingredientRows);
+          if (ingredientError) {
+            throw ingredientError;
+          }
+        }
+
+        const timeline = payload.detail.tracabilite?.timeline ?? [];
+        let createdSteps: Array<{ id: string; step_label: string; sort_order: number }> = [];
+        if (timeline.length) {
+          const stepRows = timeline
+            .map((step, index) => {
+              const label = (step.etape || '').trim();
+              if (!label) return null;
+              const locationParts = [
+                step.address,
+                step.addressDetails,
+                step.postcode,
+                step.city,
+                step.country,
+                step.lieu,
+              ]
+                .map((value) => (value ?? '').trim())
+                .filter(Boolean);
+              return {
+                product_id: productId,
+                step_label: label,
+                description: step.description?.trim() || null,
+                location: locationParts.length ? locationParts.join(', ') : null,
+                location_address: step.address?.trim() || null,
+                location_details: step.addressDetails?.trim() || null,
+                location_postcode: step.postcode?.trim() || null,
+                location_city: step.city?.trim() || null,
+                location_country: step.country?.trim() || null,
+                location_lat: Number.isFinite(step.lat) ? step.lat : null,
+                location_lng: Number.isFinite(step.lng) ? step.lng : null,
+                sort_order: index,
+              };
+            })
+            .filter(Boolean) as Array<Record<string, unknown>>;
+
+          if (stepRows.length) {
+            const { data: stepData, error: stepError } = await supabaseClient
+              .from('product_journey_steps')
+              .insert(stepRows)
+              .select('id, step_label, sort_order');
+            if (stepError) {
+              throw stepError;
+            }
+            createdSteps = (stepData as Array<{ id: string; step_label: string; sort_order: number }>) ?? [];
+          }
+        }
+
+        if (payload.journeyImageFiles?.length && createdSteps.length) {
+          const sortedSteps = createdSteps.slice().sort((a, b) => a.sort_order - b.sort_order);
+          const stepsByLabel = new Map<string, Array<{ id: string; step_label: string; sort_order: number }>>();
+          sortedSteps.forEach((step) => {
+            const key = normalizeLabelKey(step.step_label);
+            if (!stepsByLabel.has(key)) {
+              stepsByLabel.set(key, []);
+            }
+            stepsByLabel.get(key)?.push(step);
+          });
+
+          const usedStepIds = new Set<string>();
+
+          for (const entry of payload.journeyImageFiles) {
+            const labelKey = normalizeLabelKey(entry.stepLabel);
+            const candidates = stepsByLabel.get(labelKey);
+            let targetStep = candidates?.shift() ?? sortedSteps.find((step) => !usedStepIds.has(step.id));
+            if (!targetStep) continue;
+            usedStepIds.add(targetStep.id);
+
+            const fileType = entry.file.type || 'image/webp';
+            const extension = fileType.split('/')[1] || 'webp';
+            const targetPath = `${productId}/journey-${targetStep.id}-${Date.now()}.${extension}`;
+            const { error: uploadError } = await supabaseClient.storage
+              .from(JOURNEY_IMAGE_BUCKET)
+              .upload(targetPath, entry.file, {
+                upsert: false,
+                contentType: fileType,
+                cacheControl: '3600',
+              });
+            if (uploadError) {
+              throw uploadError;
+            }
+
+            const { error: updateError } = await supabaseClient
+              .from('product_journey_steps')
+              .update({
+                evidence_path: targetPath,
+                evidence_label: entry.stepLabel || targetStep.step_label,
+              })
+              .eq('id', targetStep.id);
+            if (updateError) {
+              throw updateError;
+            }
+          }
+        }
+
+        const localProduct: Product = {
+          id: productCode,
+          productCode,
+          slug: payload.product.slug ?? slugify(payload.product.name || productCode),
+          name: payload.product.name,
+          description: payload.product.description ?? '',
+          price: 0,
+          unit: packaging || (saleUnit === 'kg' ? 'kg' : 'piece'),
+          quantity: 0,
+          category: payload.product.category,
+          imageUrl: primaryImageUrl,
+          producerId: producerProfileId ?? payload.product.producerId ?? productCode,
+          producerName: payload.product.producerName,
+          producerLocation: payload.product.producerLocation,
+          inStock: false,
+          measurement,
+          weightKg: payload.product.weightKg,
+        };
+
+        const nextDetail: ProductDetail = {
+          ...payload.detail,
+          productId: productCode,
+          productImage: primaryImageUrl
+            ? {
+                url: primaryImageUrl,
+                alt: payload.detail.productImage?.alt ?? payload.product.name,
+              }
+            : payload.detail.productImage,
+        };
+
+        finalizeCreate(localProduct, nextDetail);
+      } catch (error) {
+        console.error('Create product error:', error);
+        toast.error('Creation du produit impossible.');
+      }
+    })();
   };
 
   const handleUpdateUser = async (userData: Partial<User>) => {
@@ -1827,6 +2124,11 @@ export default function App() {
     }
 
     const normalizedRole = normalizeUserRole(userData.role ?? user.role);
+    const nextAccountType = userData.accountType ?? user.accountType ?? 'individual';
+    if (normalizedRole === 'producer' && nextAccountType === 'auto_entrepreneur') {
+      toast.error('Les auto-entreprises ne peuvent pas devenir producteur.');
+      return;
+    }
     const nextAddressDetails = (userData.addressDetails ?? user.addressDetails ?? '').trim();
 
     if (!supabaseClient) {
@@ -1854,7 +2156,7 @@ export default function App() {
         name: userData.name ?? user.name,
         handle: nextHandle,
         role: normalizedRole,
-        account_type: userData.accountType ?? user.accountType ?? 'individual',
+        account_type: nextAccountType,
         tagline: userData.tagline ?? user.tagline,
         website: userData.website ?? user.website,
         address: userData.address ?? user.address,
@@ -1911,7 +2213,7 @@ export default function App() {
     }
 
     let legalEntityRow: LegalEntityRow | null = null;
-      if ((payload.account_type ?? user.accountType) !== 'individual' && userData.legalEntity?.legalName && userData.legalEntity.siret) {
+      if (nextAccountType !== 'individual' && userData.legalEntity?.legalName && userData.legalEntity.siret) {
         const legalPayload = {
           profile_id: user.id,
           legal_name: userData.legalEntity.legalName,
@@ -2151,6 +2453,7 @@ export default function App() {
         filteredOrders={filteredMapOrders}
         canSaveProduct={canSaveProduct}
         deck={deck}
+        supabaseClient={supabaseClient}
         onAddToDeck={handleAddToDeck}
         onRemoveFromDeck={handleRemoveFromDeck}
         onOpenProduct={openProductView}
@@ -2320,7 +2623,6 @@ export default function App() {
           title: 'Partager cette page',
           subtitle: pageTitle || undefined,
         };
-        console.log('handleShareClick payload', payload);
         openShareOverlay(payload);
       };
       return (
@@ -2783,7 +3085,13 @@ export default function App() {
           <Route
             path="/produit/nouveau"
             element={renderProtected(
-              () => <AddProductForm onAddProduct={handleAddProduct} supabaseClient={supabaseClient} />,
+              () => (
+                <AddProductForm
+                  onAddProduct={handleAddProduct}
+                  supabaseClient={supabaseClient}
+                  currentUser={user}
+                />
+              ),
               '/produit/nouveau'
             )}
           />
@@ -2810,7 +3118,7 @@ export default function App() {
             }
           />
           <Route
-            path="/produits/:slugAndCode/lots/:lot_code"
+            path="/produits/:slugAndCode/lot/:lotCode"
             element={
               <ProductRouteView
                 products={products}

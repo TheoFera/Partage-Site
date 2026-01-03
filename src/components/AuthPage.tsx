@@ -43,7 +43,9 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const [postcode, setPostcode] = React.useState(locationState?.signupPrefill?.postcode ?? '');
   const [address, setAddress] = React.useState(locationState?.signupPrefill?.address ?? '');
   const [addressDetails, setAddressDetails] = React.useState(locationState?.signupPrefill?.addressDetails ?? '');
-  const [accountType, setAccountType] = React.useState<'individual' | 'company' | 'association' | 'public_institution'>('individual');
+  const [accountType, setAccountType] = React.useState<
+    'individual' | 'auto_entrepreneur' | 'company' | 'association' | 'public_institution'
+  >('individual');
   const [loading, setLoading] = React.useState(false);
   const [resetEmailSent, setResetEmailSent] = React.useState(false);
 
@@ -367,7 +369,12 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                         value={accountType}
                         onChange={(e) =>
                           setAccountType(
-                            (e.target.value as 'individual' | 'company' | 'association' | 'public_institution') ??
+                            (e.target.value as
+                              | 'individual'
+                              | 'auto_entrepreneur'
+                              | 'company'
+                              | 'association'
+                              | 'public_institution') ??
                               'individual'
                           )
                         }
@@ -375,6 +382,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                         required
                       >
                         <option value="individual">Particulier</option>
+                        <option value="auto_entrepreneur">Auto-entreprise</option>
                         <option value="company">Entreprise</option>
                         <option value="association">Association</option>
                       </select>

@@ -2,6 +2,7 @@ import React from 'react';
 import { ArrowLeft, CreditCard, ShieldCheck, Sparkles } from 'lucide-react';
 import type { GroupOrder, OrderPurchaseDraft } from '../types';
 import './OrderPaymentView.css';
+import { eurosToCents, formatEurosFromCents } from '../lib/money';
 
 interface OrderPaymentViewProps {
   order: GroupOrder;
@@ -11,7 +12,7 @@ interface OrderPaymentViewProps {
 }
 
 function formatPrice(value: number) {
-  return `${value.toFixed(2)} EUR`;
+  return formatEurosFromCents(eurosToCents(value));
 }
 
 export function OrderPaymentView({

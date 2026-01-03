@@ -15,7 +15,16 @@ import {
   Phone,
   Building2,
 } from 'lucide-react';
-import { DeckCard, DeliveryDay, DeliveryLeadType, GroupOrder, ProducerLabelDetail, Product, User } from '../types';
+import {
+  DeckCard,
+  DeliveryDay,
+  DeliveryLeadType,
+  GroupOrder,
+  LegalEntity,
+  ProducerLabelDetail,
+  Product,
+  User,
+} from '../types';
 import { Avatar } from './Avatar';
 import { AvatarUploader } from './AvatarUploader';
 import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from './ProductsLanding';
@@ -125,7 +134,9 @@ export function ProfileView({
   const addressLabel = canShowAddress ? user.address || 'Adresse non renseignée' : 'Adresse masquée';
   const profileTagline = user.tagline ?? '';
   const accountTypeLabel =
-    user.accountType === 'company'
+    user.accountType === 'auto_entrepreneur'
+      ? 'Auto-entreprise'
+      : user.accountType === 'company'
       ? 'Entreprise'
       : user.accountType === 'association'
       ? 'Association'
@@ -848,10 +859,17 @@ function ProfileEditPanel({
     return true;
   };
 
+  const canBeProducer =
+    accountType === 'company' || accountType === 'association' || accountType === 'public_institution';
+
   const handleSave = async () => {
     const hasAddress = Boolean(address.trim() && city.trim() && postcode.trim());
     const hasIdentity = Boolean(user.verified);
     const hasLegalInfo = accountType !== 'individual' && Boolean(legalName.trim() && siret.trim());
+    if (role === 'producer' && !canBeProducer) {
+      toast.error('Les auto-entreprises ne peuvent pas devenir producteur.');
+      return;
+    }
 
     if (role === 'sharer' && (!hasIdentity || !hasAddress)) {
       toast.error('Pour devenir partageur, vérifiez votre identité et complétez votre adresse.');
@@ -889,13 +907,20 @@ function ProfileEditPanel({
         ? { deliveryLeadType: 'fixed_day' as DeliveryLeadType, deliveryFixedDay }
         : { deliveryLeadType: 'days' as DeliveryLeadType, deliveryLeadDays };
 
+    const entityType: LegalEntity['entityType'] =
+      accountType === 'association'
+        ? 'association'
+        : accountType === 'public_institution'
+        ? 'public_institution'
+        : 'company';
+
     const legalEntity =
       accountType !== 'individual' && legalName.trim() && siret.trim()
         ? {
             legalName: legalName.trim(),
             siret: siret.trim(),
             vatNumber: vatNumber.trim() || undefined,
-            entityType: accountType as 'company' | 'association' | 'public_institution',
+            entityType,
             producerCategory: producerCategory.trim() || undefined,
             iban: iban.trim() || undefined,
             accountHolderName: accountHolderName.trim() || undefined,
@@ -1209,15 +1234,15 @@ function ProfileEditPanel({
                 <RoleButton
                   label="Producteur"
                   active={role === 'producer'}
-                  disabled={accountType === 'individual' || !legalName.trim() || !siret.trim()}
+                  disabled={!canBeProducer || !legalName.trim() || !siret.trim()}
                   onClick={() => {
-                    if (accountType !== 'individual' && legalName.trim() && siret.trim()) setRole('producer');
+                    if (canBeProducer && legalName.trim() && siret.trim()) setRole('producer');
                   }}
-                  hint="Renseignez votre entreprise (type != particulier, raison sociale et SIRET)."
+                  hint="Auto-entreprise non eligible, raison sociale et SIRET requis."
                 />
               </div>
               <p className="text-xs text-[#9CA3AF]">
-                Partageur: identité vérifiée + adresse complète. Producteur: compte non particulier avec raison sociale et SIRET.
+                Partageur: identite verifiee + adresse complete. Producteur: entreprise/association/collectivite avec raison sociale et SIRET.
               </p>
             </div>
             <div className="space-y-2">
@@ -1226,13 +1251,18 @@ function ProfileEditPanel({
                 value={accountType}
                 onChange={(e) =>
                   setAccountType(
-                    (e.target.value as 'individual' | 'company' | 'association' | 'public_institution') ?? 'individual'
+                    (e.target.value as
+                      | 'individual'
+                      | 'auto_entrepreneur'
+                      | 'company'
+                      | 'association'
+                      | 'public_institution') ?? 'individual'
                   )
                 }
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
               >
                 <option value="individual">Particulier</option>
-                <option value="company">Auto-entreprise</option>
+                <option value="auto_entrepreneur">Auto-entreprise</option>
                 <option value="company">Entreprise</option>
                 <option value="association">Association</option>
                 <option value="public_institution">Autre</option>

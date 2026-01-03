@@ -124,7 +124,7 @@
   }
 
   .pd-grid--split {
-    grid-template-columns: 1.2fr 0.8fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .pd-grid--wide {
@@ -625,6 +625,84 @@
   background: #FFFFFF;
 }
 
+.pd-lot-card--selectable {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.pd-lot-card--selectable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px -18px rgba(31, 41, 55, 0.35);
+}
+
+.pd-lot-card--active {
+  border-color: #FF6B4A;
+  box-shadow: 0 14px 26px -18px rgba(255, 107, 74, 0.45);
+}
+
+.pd-lot-card--create {
+  border-style: dashed;
+  background: #FFF6EB;
+}
+
+.pd-lot-carousel {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.pd-lot-carousel__viewport {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.pd-lot-carousel__track {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.75rem;
+  align-items: stretch;
+  justify-content: center;
+  user-select: none;
+}
+
+.pd-lot-carousel__track > * {
+  width: 220px;
+  min-width: 220px;
+  flex: 0 0 220px;
+}
+
+.pd-lot-carousel__arrow {
+  position: absolute;
+  top: 50%;
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  background: #FF6B4A;
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.2);
+  transition: opacity 140ms ease-out, transform 140ms ease-out;
+  z-index: 3;
+  cursor: pointer;
+}
+
+.pd-lot-carousel__arrow--left {
+  left: -6px;
+  transform: translateY(-50%);
+}
+
+.pd-lot-carousel__arrow--right {
+  right: -6px;
+  transform: translateY(-50%);
+}
+
 .pd-lot-badge {
   display: inline-flex;
   align-items: center;
@@ -656,6 +734,10 @@
   background: linear-gradient(135deg, #FFF6EB 0%, #F4F7FF 100%);
   overflow: hidden;
   position: relative;
+}
+
+.pd-map--circuit {
+  height: 22rem;
 }
 
 .pd-map__label {
@@ -928,6 +1010,15 @@
 
 .pd-table__row {
   border-top: 1px solid #F1E8D7;
+}
+
+.pd-table__row--locked {
+  background: #FFF7F2;
+}
+
+.pd-table__row--locked .pd-input {
+  background: #F3F4F6;
+  color: #9CA3AF;
 }
 
 .pd-nutrition {

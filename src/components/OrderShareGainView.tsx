@@ -2,6 +2,7 @@ import React from 'react';
 import { CheckCircle2, Share2, Sparkles, Users } from 'lucide-react';
 import type { GroupOrder, OrderPurchaseDraft } from '../types';
 import './OrderShareGainView.css';
+import { eurosToCents, formatEurosFromCents } from '../lib/money';
 
 interface OrderShareGainViewProps {
   order: GroupOrder;
@@ -11,7 +12,7 @@ interface OrderShareGainViewProps {
 }
 
 function formatPrice(value: number) {
-  return `${value.toFixed(2)} EUR`;
+  return formatEurosFromCents(eurosToCents(value));
 }
 
 function estimateLogisticsCost(order: GroupOrder) {

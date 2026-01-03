@@ -7,7 +7,7 @@ export interface User {
   name: string;
   role: UserRole;
   handle?: string;
-  accountType?: 'individual' | 'company' | 'association' | 'public_institution';
+  accountType?: 'individual' | 'auto_entrepreneur' | 'company' | 'association' | 'public_institution';
   profileImage?: string;
   avatarPath?: string;
   avatarUpdatedAt?: string;
@@ -65,6 +65,8 @@ export interface Product {
   id: string;
   productCode?: string;
   slug?: string;
+  activeLotCode?: string;
+  activeLotId?: string;
   name: string;
   description: string;
   price: number;
@@ -238,6 +240,7 @@ export interface Tracabilite {
 
 export interface ProductionLot {
   id: string;
+  lotDbId?: string;
   nomLot: string;
   debut: string;
   fin: string;
@@ -253,7 +256,13 @@ export interface ProductionLot {
 }
 
 export interface RepartitionPoste {
+  id?: string;
+  lotId?: string;
   partiePrenante?: string;
+  stakeholderKey?: string;
+  platformCostCode?: string;
+  source?: 'producer' | 'platform';
+  sortOrder?: number;
   nom: string;
   valeur: number;
   type: 'eur' | 'percent';
@@ -400,6 +409,7 @@ export interface ProductListingRow {
   producer_name: string | null;
   producer_location: string | null;
   primary_image_path: string | null;
+  active_lot_id?: string | null;
   active_lot_code: string | null;
   active_lot_price_cents: number | null;
   active_lot_stock_units: number | null;
@@ -442,6 +452,7 @@ export interface DbProductImage {
 export interface DbLot {
   id: string;
   lot_code: string;
+  lot_reference?: string | null;
   product_id: string;
   status: 'draft' | 'active' | 'sold_out' | 'archived';
   price_cents: number;
@@ -479,6 +490,17 @@ export interface DbProductJourneyStep {
 export interface DbProductLabel {
   id: string;
   product_id: string;
+  label: string;
+  description: string | null;
+  label_type: string | null;
+  obtained_year?: number | null;
+  created_at: string;
+}
+
+export interface DbLotLabel {
+  id: string;
+  product_id: string;
+  lot_id?: string | null;
   label: string;
   description: string | null;
   label_type: string | null;
@@ -555,10 +577,13 @@ export interface DbLotPriceBreakdown {
   id: string;
   lot_id: string;
   stakeholder: string | null;
+  stakeholder_key?: string | null;
+  source?: 'producer' | 'platform';
+  platform_cost_code?: string | null;
   label: string;
   value_type: 'cents' | 'percent';
   value_cents: number | null;
-  value_percent: number | null;
+  value_percent?: number | null;
   sort_order: number;
   created_at: string;
 }

@@ -1,6 +1,7 @@
 ﻿import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseClient } from '../lib/supabaseClient';
-import { formatPrixEuro } from '../lib/formatPrix';
+import { centsToEuros } from '../lib/money';
+import { fetchLotByLotCode } from '../lib/pricing';
 import { mockProducts } from './mockData';
 import { buildDefaultProductDetail, mockProductDetails } from './mockProductDetails';
 import {
@@ -17,7 +18,7 @@ import type {
   DbProductImage,
   DbProductIngredient,
   DbProductJourneyStep,
-  DbProductLabel,
+  DbLotLabel,
   DbLotPriceBreakdown,
   DbProductQuestion,
   DbProductReview,
@@ -101,16 +102,18 @@ const mapListingRowToProduct = (row: ProductListingRow, client: SupabaseClient |
   const measurement = row.sale_unit === 'kg' ? 'kg' : 'unit';
   const quantity = measurement === 'kg' ? toNumber(row.active_lot_stock_kg) : toNumber(row.active_lot_stock_units);
   const inStock = Boolean(row.active_lot_code) && quantity > 0;
-  const priceCents = row.display_price_cents ?? row.default_price_cents ?? 0;
+  const priceCents = row.active_lot_price_cents ?? 0;
   const imageUrl = buildImageUrl(client, row.primary_image_path);
 
   return {
     id: row.product_code,
     productCode: row.product_code,
     slug: row.slug,
+    activeLotCode: row.active_lot_code ?? undefined,
+    activeLotId: row.active_lot_id ?? undefined,
     name: row.name,
     description: row.description ?? '',
-    price: formatPrixEuro(priceCents),
+    price: centsToEuros(priceCents),
     unit: measurement === 'kg' ? 'kg' : row.packaging,
     quantity,
     category: row.category,
@@ -138,7 +141,8 @@ const mapLotsToProductions = (lots: DbLot[], measurement: Product['measurement']
     const endDate = lot.ddm ?? lot.dlc ?? startDate;
     return {
       id: lot.lot_code,
-      nomLot: lot.lot_comment || lot.lot_code,
+      lotDbId: lot.id,
+      nomLot: lot.lot_comment || lot.lot_reference || lot.lot_code,
       debut: startDate,
       fin: endDate,
       periodeDisponibilite: { debut: startDate, fin: endDate },
@@ -146,8 +150,8 @@ const mapLotsToProductions = (lots: DbLot[], measurement: Product['measurement']
       qteRestante: quantity,
       DLC_DDM: lot.dlc ?? lot.ddm ?? undefined,
       DLC_aReceptionEstimee: lot.dlc ?? lot.ddm ?? undefined,
-      commentaire: lot.lot_comment ?? undefined,
-      numeroLot: lot.lot_code,
+      commentaire: lot.notes ?? lot.lot_comment ?? undefined,
+      numeroLot: lot.lot_reference ?? undefined,
       statut: mapLotStatus(lot.status),
     };
   });
@@ -267,17 +271,26 @@ const mapPriceBreakdown = (
     .sort((a, b) => a.sort_order - b.sort_order)
     .map((entry) => {
       return {
+        id: entry.id,
+        lotId: entry.lot_id,
         partiePrenante: entry.stakeholder ?? undefined,
+        stakeholderKey: entry.stakeholder_key ?? undefined,
+        platformCostCode: entry.platform_cost_code ?? undefined,
+        source: entry.source ?? 'producer',
         nom: entry.label,
-        valeur: formatPrixEuro(entry.value_cents ?? 0),
+        valeur: centsToEuros(entry.value_cents ?? 0),
         type: 'eur',
+        sortOrder: entry.sort_order,
       };
     });
 
   return {
     mode: 'detaille',
     uniteReference: unitReference,
-    totalReference: lotPriceCents ? formatPrixEuro(lotPriceCents) : undefined,
+    totalReference:
+      lotPriceCents !== null && lotPriceCents !== undefined
+        ? centsToEuros(lotPriceCents)
+        : undefined,
     postes,
   };
 };
@@ -310,7 +323,7 @@ const mapQuestions = (questions: DbProductQuestion[]) => {
   };
 };
 
-const mapLabels = (labels: DbProductLabel[], producerLabels: DbProducerLabel[]) => {
+const mapLabels = (labels: DbLotLabel[]) => {
   const official: string[] = [];
   const platform: string[] = [];
   const pushLabel = (label: { label: string; label_type: string | null }) => {
@@ -323,14 +336,13 @@ const mapLabels = (labels: DbProductLabel[], producerLabels: DbProducerLabel[]) 
     platform.push(value);
   };
   labels.forEach(pushLabel);
-  producerLabels.forEach(pushLabel);
   return {
     officialBadges: official.length ? Array.from(new Set(official)) : undefined,
     platformBadges: platform.length ? Array.from(new Set(platform)) : undefined,
   };
 };
 
-const mapProductLabelDetails = (labels: DbProductLabel[]) => {
+const mapProductLabelDetails = (labels: DbLotLabel[]) => {
   const official: ProducerLabelDetail[] = [];
   const platform: ProducerLabelDetail[] = [];
   labels.forEach((label) => {
@@ -407,7 +419,7 @@ const mapProductDetail = (params: {
   images: DbProductImage[];
   lots: DbLot[];
   journeySteps: DbProductJourneyStep[];
-  labels: DbProductLabel[];
+  lotLabels: DbLotLabel[];
   producerLabels: DbProducerLabel[];
   reviews: DbProductReview[];
   questions: DbProductQuestion[];
@@ -424,7 +436,7 @@ const mapProductDetail = (params: {
     images,
     lots,
     journeySteps,
-    labels,
+    lotLabels,
     producerLabels,
     reviews,
     questions,
@@ -449,19 +461,26 @@ const mapProductDetail = (params: {
         ? 'ambiant'
         : undefined;
 
-  const mappedLabels = mapLabels(labels, producerLabels);
-  const productLabelDetails = mapProductLabelDetails(labels);
+  const lotId = selectedLot?.id ?? null;
+  const scopedLotLabels = lotId ? lotLabels.filter((label) => label.lot_id === lotId) : lotLabels;
+  const fallbackLotLabels =
+    scopedLotLabels.length || !lotId
+      ? scopedLotLabels
+      : lotLabels.filter((label) => !label.lot_id);
+
+  const mappedLabels = mapLabels(fallbackLotLabels);
+  const productLabelDetails = mapProductLabelDetails(fallbackLotLabels);
   const producerLabelDetails = mapProducerLabelDetails(producerLabels);
   const mappedIngredients = mapIngredients(ingredients);
 
   const priceReference = selectedLot
     ? {
         devise: 'EUR',
-        prixIndicatifUnitaire: formatPrixEuro(selectedLot.price_cents),
+        prixIndicatifUnitaire: centsToEuros(selectedLot.price_cents),
         unite: product.measurement === 'kg' ? 'kg' : 'piece',
         prixIndicatifAuKg:
           product.measurement === 'unit' && product.weightKg
-            ? Number((formatPrixEuro(selectedLot.price_cents) / product.weightKg).toFixed(2))
+            ? Number((centsToEuros(selectedLot.price_cents) / product.weightKg).toFixed(2))
             : undefined,
       }
     : undefined;
@@ -543,15 +562,17 @@ const mapProductRowToProduct = (row: DbProduct, selectedLot: DbLot | null, clien
     .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.sort_order - b.sort_order)[0];
   const imageUrl = buildImageUrl(client, primaryImage?.path);
   const quantity = measurement === 'kg' ? toNumber(selectedLot?.stock_kg) : toNumber(selectedLot?.stock_units);
-  const priceCents = selectedLot?.price_cents ?? row.default_price_cents ?? 0;
+  const priceCents = selectedLot?.price_cents ?? 0;
 
   return {
     id: row.product_code,
     productCode: row.product_code,
     slug: row.slug,
+    activeLotCode: selectedLot?.lot_code ?? undefined,
+    activeLotId: selectedLot?.id ?? undefined,
     name: row.name,
     description: row.description ?? '',
-    price: formatPrixEuro(priceCents),
+    price: centsToEuros(priceCents),
     unit: measurement === 'kg' ? 'kg' : row.packaging,
     quantity,
     category: row.category,
@@ -577,7 +598,7 @@ const getDemoLotDetailByCode = (lotCode: string) => {
   const demoProducts = getDemoProducts();
   for (const product of demoProducts) {
     const detail = mockProductDetails[product.id] ?? buildDefaultProductDetail(product);
-    const hasLot = detail.productions?.some((lot) => lot.id === lotCode || lot.numeroLot === lotCode);
+    const hasLot = detail.productions?.some((lot) => lot.id === lotCode);
     if (hasLot) {
       return { product, detail, lotCode };
     }
@@ -591,17 +612,17 @@ export const listProducts = async (): Promise<{ products: Product[]; isDemo: boo
   }
   const client = getSupabaseOrNull();
   if (!client) {
-    return { products: getDemoProducts(), isDemo: true };
+    return { products: [], isDemo: false };
   }
 
   const { data, error } = await client.from('v_products_listing').select('*');
   if (error) {
     console.warn('Supabase products listing error:', error);
-    return { products: getDemoProducts(), isDemo: true };
+    return { products: [], isDemo: false };
   }
 
   if (!data || data.length === 0) {
-    return { products: getDemoProducts(), isDemo: true };
+    return { products: [], isDemo: false };
   }
 
   const products = (data as ProductListingRow[]).map((row) => mapListingRowToProduct(row, client));
@@ -609,16 +630,15 @@ export const listProducts = async (): Promise<{ products: Product[]; isDemo: boo
 };
 
 export const getProductByCode = async (
-  productCode: string,
-  useDemoFallback = false
+  productCode: string
 ): Promise<{ product: Product; detail: ProductDetail; activeLotCode?: string | null } | null> => {
   if (!productCode) return null;
-  if (DEMO_MODE || useDemoFallback) {
+  if (DEMO_MODE) {
     return getDemoProductDetailByCode(productCode);
   }
 
   const client = getSupabaseOrNull();
-  if (!client) return getDemoProductDetailByCode(productCode);
+  if (!client) return null;
 
   const { data: productRow, error: productError } = await client
     .from('products')
@@ -627,7 +647,6 @@ export const getProductByCode = async (
     .maybeSingle();
 
   if (productError || !productRow) {
-    if (useDemoFallback) return getDemoProductDetailByCode(productCode);
     return null;
   }
 
@@ -637,7 +656,6 @@ export const getProductByCode = async (
     imagesResult,
     lotsResult,
     journeyResult,
-    labelsResult,
     reviewsResult,
     questionsResult,
     ingredientsResult,
@@ -646,7 +664,6 @@ export const getProductByCode = async (
     client.from('product_images').select('*').eq('product_id', productId),
     client.from('lots').select('*').eq('product_id', productId),
     client.from('product_journey_steps').select('*').eq('product_id', productId),
-    client.from('product_labels').select('*').eq('product_id', productId),
     client.from('product_reviews').select('*').eq('product_id', productId),
     client.from('product_questions').select('*').eq('product_id', productId),
     client.from('product_ingredients').select('*').eq('product_id', productId),
@@ -658,6 +675,9 @@ export const getProductByCode = async (
   const lots = (lotsResult.data as DbLot[]) ?? [];
   const producerLabels = (producerLabelsResult.data as DbProducerLabel[]) ?? [];
   const selectedLot = pickLatestActiveLot(lots);
+  const lotLabelsResult = selectedLot
+    ? await client.from('lot_labels').select('*').eq('lot_id', selectedLot.id)
+    : { data: [] };
 
   const [lotTraceResult, lotInputsResult, priceBreakdownResult] = selectedLot
     ? await Promise.all([
@@ -680,7 +700,7 @@ export const getProductByCode = async (
     images: (imagesResult.data as DbProductImage[]) ?? [],
     lots,
     journeySteps: (journeyResult.data as DbProductJourneyStep[]) ?? [],
-    labels: (labelsResult.data as DbProductLabel[]) ?? [],
+    lotLabels: (lotLabelsResult.data as DbLotLabel[]) ?? [],
     producerLabels,
     reviews: (reviewsResult.data as DbProductReview[]) ?? [],
     questions: (questionsResult.data as DbProductQuestion[]) ?? [],
@@ -696,25 +716,25 @@ export const getProductByCode = async (
 };
 
 export const getLotByCode = async (
-  lotCode: string,
-  useDemoFallback = false
+  lotCode: string
 ): Promise<{ product: Product; detail: ProductDetail; lotCode?: string | null } | null> => {
   if (!lotCode) return null;
-  if (DEMO_MODE || useDemoFallback) {
+  if (DEMO_MODE) {
     return getDemoLotDetailByCode(lotCode);
   }
 
   const client = getSupabaseOrNull();
-  if (!client) return getDemoLotDetailByCode(lotCode);
+  if (!client) return null;
 
-  const { data: lotRow, error: lotError } = await client
-    .from('lots')
-    .select('*')
-    .eq('lot_code', lotCode)
-    .maybeSingle();
+  let lotRow: DbLot | null = null;
+  try {
+    lotRow = await fetchLotByLotCode(client, lotCode);
+  } catch (error) {
+    console.warn('Supabase lot load error:', error);
+    return null;
+  }
 
-  if (lotError || !lotRow) {
-    if (useDemoFallback) return getDemoLotDetailByCode(lotCode);
+  if (!lotRow) {
     return null;
   }
 
@@ -732,10 +752,11 @@ export const getLotByCode = async (
     imagesResult,
     lotsResult,
     journeyResult,
-    labelsResult,
     reviewsResult,
     questionsResult,
     ingredientsResult,
+    lotLabelsResult,
+    priceBreakdownResult,
     lotTraceResult,
     lotInputsResult,
     producerLabelsResult,
@@ -743,10 +764,10 @@ export const getLotByCode = async (
     client.from('product_images').select('*').eq('product_id', productId),
     client.from('lots').select('*').eq('product_id', productId),
     client.from('product_journey_steps').select('*').eq('product_id', productId),
-    client.from('product_labels').select('*').eq('product_id', productId),
     client.from('product_reviews').select('*').eq('product_id', productId),
     client.from('product_questions').select('*').eq('product_id', productId),
     client.from('product_ingredients').select('*').eq('product_id', productId),
+    client.from('lot_labels').select('*').eq('lot_id', (lotRow as DbLot).id),
     client.from('lot_price_breakdown').select('*').eq('lot_id', (lotRow as DbLot).id),
     client.from('lot_trace_steps').select('*').eq('lot_id', (lotRow as DbLot).id),
     client.from('lot_inputs').select('*').eq('lot_id', (lotRow as DbLot).id),
@@ -769,7 +790,7 @@ export const getLotByCode = async (
     images: (imagesResult.data as DbProductImage[]) ?? [],
     lots: (lotsResult.data as DbLot[]) ?? [],
     journeySteps: (journeyResult.data as DbProductJourneyStep[]) ?? [],
-    labels: (labelsResult.data as DbProductLabel[]) ?? [],
+    lotLabels: (lotLabelsResult.data as DbLotLabel[]) ?? [],
     producerLabels,
     reviews: (reviewsResult.data as DbProductReview[]) ?? [],
     questions: (questionsResult.data as DbProductQuestion[]) ?? [],

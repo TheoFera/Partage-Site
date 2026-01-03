@@ -19,6 +19,7 @@ import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from 
 import { toast } from 'sonner';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import './OrderClientView.css';
+import { eurosToCents, formatEurosFromCents } from '../lib/money';
 
 interface OrderClientViewProps {
   order: GroupOrder;
@@ -32,7 +33,7 @@ interface OrderClientViewProps {
 }
 
 function formatPrice(value: number) {
-  return `${value.toFixed(2)} EUR`;
+  return formatEurosFromCents(eurosToCents(value));
 }
 
 function labelForDay(day?: string) {

@@ -17,7 +17,6 @@ interface ShareOverlayProps {
 }
 
 export function ShareOverlay({ open, link, title, subtitle, description, details, onClose }: ShareOverlayProps) {
-  console.log('render ShareOverlay', open);
   const qrUrl = React.useMemo(() => {
     const safeLink = link || (typeof window !== 'undefined' ? window.location.href : '');
     return `https://api.qrserver.com/v1/create-qr-code/?size=420x420&data=${encodeURIComponent(safeLink)}`;

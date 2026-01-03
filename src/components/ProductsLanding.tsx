@@ -1,9 +1,12 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { Link, useNavigate } from 'react-router-dom';
 import { Product, GroupOrder, DeckCard } from '../types';
+import { Avatar } from './Avatar';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { FiltersPopover } from './FiltersPopover';
 import './ProductsLanding.css';
+import { eurosToCents, formatEurosFromCents } from '../lib/money';
 import {
   Sparkles,
   MapPin,
@@ -20,6 +23,7 @@ import {
   MIN_VISIBLE_CARDS,
   CONTAINER_SIDE_PADDING,
 } from '../constants/cards';
+import { DEMO_MODE } from '../data/productsProvider';
 
 type SearchScope = 'products' | 'producers' | 'combined';
 
@@ -30,6 +34,7 @@ interface ProductsLandingProps {
   filteredOrders: GroupOrder[];
   canSaveProduct: boolean;
   deck: DeckCard[];
+  supabaseClient?: SupabaseClient | null;
   onAddToDeck?: (product: Product) => void;
   onRemoveFromDeck?: (productId: string) => void;
   onOpenProduct: (productId: string) => void;
@@ -52,12 +57,15 @@ export interface ProductGroupDescriptor {
   products: Product[];
   variant: ProductGroupVariant;
   orderId?: string;
+  profileHandle?: string;
   sharerName?: string;
   minWeight?: number;
   maxWeight?: number;
   orderedWeight?: number;
   deadline?: Date;
   avatarUrl?: string;
+  avatarPath?: string | null;
+  avatarUpdatedAt?: string | null;
 }
 
 const productFilterOptions = [
@@ -104,6 +112,19 @@ const producerTagsMap: Record<string, string[]> = {
   p4: ['eleveur'],
   p5: ['autre'],
 };
+
+const DEFAULT_PROFILE_AVATAR =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
+      <circle cx="80" cy="80" r="80" fill="#E5E7EB" />
+      <circle cx="80" cy="64" r="30" fill="#9CA3AF" />
+      <ellipse cx="80" cy="118" rx="42" ry="32" fill="#6B7280" />
+    </svg>`
+  );
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (value?: string | null) => Boolean(value && UUID_REGEX.test(value));
 
 const normalizeText = (value: string) =>
   value
@@ -183,12 +204,17 @@ const getProductAttributes = (product: Product) => {
   return attributes;
 };
 
+const hasActiveLot = (product: Product) => Boolean(product.activeLotCode ?? product.activeLotId);
+const hasValidLotPrice = (product: Product) =>
+  DEMO_MODE ? Number(product.price) > 0 : hasActiveLot(product) && Number(product.price) > 0;
+
 export function ProductsLanding({
   products,
   filteredProducts,
   filteredOrders,
   canSaveProduct,
   deck,
+  supabaseClient,
   onAddToDeck,
   onRemoveFromDeck,
   onOpenProduct,
@@ -237,6 +263,7 @@ export function ProductsLanding({
 
   const productResults = React.useMemo(() => {
     return filteredProducts.filter((product) => {
+      if (!hasValidLotPrice(product)) return false;
       const categorySlug = slugify(product.category);
       if (categories.length && !categories.some((cat) => categorySlug.includes(cat))) return false;
 
@@ -292,6 +319,7 @@ export function ProductsLanding({
   const ordersResults = React.useMemo(() => {
     return filteredOrders.filter((order) => {
       const orderHasMatch = order.products.some((product) => {
+        if (!hasValidLotPrice(product)) return false;
         const categorySlug = slugify(product.category);
         if (categories.length && !categories.some((cat) => categorySlug.includes(cat))) return false;
 
@@ -317,22 +345,88 @@ export function ProductsLanding({
     }));
     return rows.sort((a, b) => a.name.localeCompare(b.name));
   }, [producerResults]);
+  const [profileMetaById, setProfileMetaById] = React.useState<
+    Record<string, { path: string | null; updatedAt: string | null; handle?: string | null }>
+  >({});
+  const producerProfileIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    producerProductRows.forEach((producer) => {
+      if (isUuid(producer.id)) ids.add(producer.id);
+    });
+    return Array.from(ids);
+  }, [producerProductRows]);
+  const sharerProfileIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    ordersResults.forEach((order) => {
+      if (isUuid(order.sharerId)) ids.add(order.sharerId);
+    });
+    return Array.from(ids);
+  }, [ordersResults]);
+  const profileIds = React.useMemo(
+    () => Array.from(new Set([...producerProfileIds, ...sharerProfileIds])),
+    [producerProfileIds, sharerProfileIds]
+  );
+
+  React.useEffect(() => {
+    let active = true;
+    if (!supabaseClient || !profileIds.length) {
+      setProfileMetaById({});
+      return () => {
+        active = false;
+      };
+    }
+
+    supabaseClient
+      .from('profiles')
+      .select('id, handle, avatar_path, avatar_updated_at')
+      .in('id', profileIds)
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.warn('Producer avatars load error:', error);
+          setProfileMetaById({});
+          return;
+        }
+        const mapped: Record<string, { path: string | null; updatedAt: string | null; handle?: string | null }> = {};
+        (data as Array<Record<string, unknown>> | null)?.forEach((row) => {
+          const id = typeof row.id === 'string' ? row.id : '';
+          if (!id) return;
+          mapped[id] = {
+            path: (row.avatar_path as string | null) ?? null,
+            updatedAt: (row.avatar_updated_at as string | null) ?? null,
+            handle: (row.handle as string | null) ?? null,
+          };
+        });
+        setProfileMetaById(mapped);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [profileIds, supabaseClient]);
 
   const producerGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
-    return producerProductRows.map((producer) => ({
-      id: producer.id,
-      title: producer.name,
-      location: producer.postcode ? `${producer.location} ${producer.postcode}` : producer.location,
-      tags: producer.tags,
-      products: producer.products,
-      variant: 'producer',
-      avatarUrl: producer.products[0]?.imageUrl,
-    }));
-  }, [producerProductRows]);
+    return producerProductRows.map((producer) => {
+      const avatar = profileMetaById[producer.id];
+      return {
+        id: producer.id,
+        title: producer.name,
+        location: producer.postcode ? `${producer.location} ${producer.postcode}` : producer.location,
+        tags: producer.tags,
+        products: producer.products,
+        variant: 'producer',
+        profileHandle: avatar?.handle ?? undefined,
+        avatarPath: avatar?.path ?? null,
+        avatarUpdatedAt: avatar?.updatedAt ?? null,
+      };
+    });
+  }, [producerProductRows, profileMetaById]);
 
   const orderGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     return ordersResults.map((order) => {
-      const sortedProducts = [...order.products].sort((a, b) => a.name.localeCompare(b.name));
+      const sortedProducts = order.products
+        .filter(hasValidLotPrice)
+        .sort((a, b) => a.name.localeCompare(b.name));
       const locationFallback =
         order.pickupAddress || order.mapLocation?.areaLabel || sortedProducts[0]?.producerLocation || order.producerName;
       const location = formatCityLabel(order.pickupCity, order.pickupPostcode, locationFallback);
@@ -349,6 +443,7 @@ export function ProductsLanding({
         tags: [order.sharerName, productCountLabel].filter(Boolean) as string[],
         products: sortedProducts,
         variant: 'order',
+        profileHandle: profileMetaById[order.sharerId]?.handle ?? undefined,
         sharerName: order.sharerName,
         minWeight: order.minWeight,
         maxWeight: order.maxWeight,
@@ -357,7 +452,7 @@ export function ProductsLanding({
         avatarUrl: sortedProducts[0]?.imageUrl,
       };
     });
-  }, [ordersResults]);
+  }, [ordersResults, profileMetaById]);
 
   const combinedGroups = React.useMemo(
     () => [...orderGroups, ...producerGroups],
@@ -554,6 +649,7 @@ export function ProductsLanding({
                     group={group}
                     canSave={canSaveProduct}
                     deckIds={deckIds}
+                    supabaseClient={supabaseClient}
                     onSave={onAddToDeck}
                     onRemoveFromDeck={onRemoveFromDeck}
                     onToggleSelection={toggleSelection}
@@ -643,6 +739,7 @@ export function ProductsLanding({
                     group={group}
                     canSave={canSaveProduct}
                     deckIds={deckIds}
+                    supabaseClient={supabaseClient}
                     onSave={onAddToDeck}
                     onRemoveFromDeck={onRemoveFromDeck}
                     onToggleSelection={toggleSelection}
@@ -703,6 +800,8 @@ export function ProductResultCard({
     setSelected(inDeck);
   }, [inDeck]);
   const measurementLabel = product.measurement === 'kg' ? '/ Kg' : "/ unité";
+  const hasPrice = hasValidLotPrice(product);
+  const priceLabel = hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix a venir';
   const width = cardWidth ?? CARD_WIDTH;
   const cardStyle = {
     width: `${width}px`,
@@ -786,7 +885,7 @@ export function ProductResultCard({
             <button
               type="button"
               onClick={() => onOpenProducer?.(product)}
-              className="text-xs text-[#6B7280] truncate text-left hover:text-[#FF6B4A] transition-colors"
+              className="block w-full text-xs text-[#6B7280] truncate text-left hover:text-[#FF6B4A] transition-colors"
             >
               {headerText}
             </button>
@@ -794,7 +893,7 @@ export function ProductResultCard({
           <button
             type="button"
             onClick={() => onOpen(product.productCode ?? product.id)}
-            className="text-left text-base font-semibold text-[#1F2937] hover:text-[#FF6B4A] transition-colors"
+            className="block w-full text-left text-base font-semibold text-[#1F2937] hover:text-[#FF6B4A] transition-colors"
           >
             {product.name}
           </button>
@@ -802,11 +901,13 @@ export function ProductResultCard({
 
         <div className="flex items-center gap-2 text-xs text-[#1F2937] flex-wrap">
           <span className="text-lg font-semibold text-[#FF6B4A]">
-            {product.price.toFixed(2)} €
+            {priceLabel}
           </span>
-          <span className="text-[10px] px-0 py-0.5 text-[#374151] bg-transparent">
-            {measurementLabel} ({product.unit})
-          </span>
+          {hasPrice ? (
+            <span className="text-[10px] px-0 py-0.5 text-[#374151] bg-transparent">
+              {measurementLabel} ({product.unit})
+            </span>
+          ) : null}
         </div>
 
         
@@ -819,6 +920,7 @@ export function ProductGroupContainer({
   group,
   canSave,
   deckIds,
+  supabaseClient,
   onSave,
   onRemoveFromDeck,
   onToggleSelection,
@@ -845,13 +947,18 @@ export function ProductGroupContainer({
   onSelectProducerCategory?: (tag: string) => void;
   selected?: boolean;
   showSelectionControl?: boolean;
+  supabaseClient?: SupabaseClient | null;
 }) {
+  const navigate = useNavigate();
   const useCarousel = group.products.length > MAX_VISIBLE_CARDS;
   const [headerHover, setHeaderHover] = React.useState(false);
   const [bodyHover, setBodyHover] = React.useState(false);
   const [supportsHover, setSupportsHover] = React.useState(true);
   const [overlayOpen, setOverlayOpen] = React.useState(false);
-  const avatarUrl = group.avatarUrl || group.products[0]?.imageUrl;
+  const isOrder = group.variant === 'order';
+  const firstProduct = group.products[0];
+  const avatarUrl = isOrder ? group.avatarUrl || firstProduct?.imageUrl : undefined;
+  const hasAvatar = isOrder ? Boolean(avatarUrl) : true;
 
   // Index de départ des produits visibles dans le carrousel
   const [startIndex, setStartIndex] = React.useState(0);
@@ -883,9 +990,6 @@ export function ProductGroupContainer({
     paddingInline: CONTAINER_SIDE_PADDING,
   };
 
-
-  const isOrder = group.variant === 'order';
-  const firstProduct = group.products[0];
   const hostLabel = isOrder
     ? group.sharerName || firstProduct?.producerName || group.title
     : getProducerCategoryLabel(group.tags);
@@ -918,10 +1022,37 @@ export function ProductGroupContainer({
 
   const availabilityProgress = React.useMemo(() => {
     if (group.variant !== 'producer') return null;
-    const total = group.products.length || 1;
-    const inStockCount = group.products.filter((p) => p.inStock).length;
-    const ratio = Math.max(0, Math.min(1, inStockCount / total));
-    const label = `${inStockCount}/${total} dispo`;
+    const buckets = {
+      kg: { total: 0, max: 0, count: 0 },
+      unit: { total: 0, max: 0, count: 0 },
+    };
+    group.products.forEach((product) => {
+      const quantity = Number.isFinite(product.quantity) ? Math.max(0, product.quantity) : 0;
+      const bucket = product.measurement === 'kg' ? buckets.kg : buckets.unit;
+      bucket.total += quantity;
+      bucket.count += 1;
+      bucket.max = Math.max(bucket.max, quantity);
+    });
+    const ratioParts = [
+      buckets.kg.count && buckets.kg.max > 0
+        ? buckets.kg.total / (buckets.kg.max * buckets.kg.count)
+        : null,
+      buckets.unit.count && buckets.unit.max > 0
+        ? buckets.unit.total / (buckets.unit.max * buckets.unit.count)
+        : null,
+    ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const ratio = ratioParts.length
+      ? Math.max(0, Math.min(1, ratioParts.reduce((sum, value) => sum + value, 0) / ratioParts.length))
+      : 0;
+    const formatQuantity = (value: number) => {
+      const rounded = Math.round(value * 100) / 100;
+      return Number.isInteger(rounded) ? `${rounded}` : `${rounded}`;
+    };
+    const labelParts = [
+      buckets.kg.total > 0 ? `${formatQuantity(buckets.kg.total)} kg` : null,
+      buckets.unit.total > 0 ? `${formatQuantity(buckets.unit.total)} unites` : null,
+    ].filter(Boolean);
+    const label = labelParts.length ? `${labelParts.join(' + ')} dispo` : 'Stock indisponible';
     return { ratio, label };
   }, [group.products, group.variant]);
 
@@ -935,6 +1066,11 @@ export function ProductGroupContainer({
 
 
   const handleAvatarClick = () => {
+    const handle = group.profileHandle?.trim();
+    if (handle) {
+      navigate(`/profil/${handle}`);
+      return;
+    }
     if (isOrder) {
       if (group.sharerName) {
         onOpenSharer?.(group.sharerName);
@@ -1087,7 +1223,7 @@ export function ProductGroupContainer({
           )}
         </div>
 
-        {avatarUrl && (
+        {hasAvatar && (
           <button
             type="button"
             onClick={handleAvatarClick}
@@ -1107,11 +1243,22 @@ export function ProductGroupContainer({
               cursor: 'pointer',
             }}
           >
-            <ImageWithFallback
-              src={avatarUrl}
-              alt={isOrder ? group.sharerName || 'Partageur' : firstProduct?.producerName || 'Producteur'}
-              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-            />
+            {isOrder ? (
+              <ImageWithFallback
+                src={avatarUrl}
+                alt={group.sharerName || 'Partageur'}
+                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+              />
+            ) : (
+              <Avatar
+                supabaseClient={supabaseClient ?? null}
+                path={group.avatarPath}
+                updatedAt={group.avatarUpdatedAt}
+                fallbackSrc={DEFAULT_PROFILE_AVATAR}
+                alt={firstProduct?.producerName || 'Producteur'}
+                className="w-full h-full object-cover"
+              />
+            )}
           </button>
         )}
 
@@ -1208,7 +1355,7 @@ export function ProductGroupContainer({
               gap: '8px',
               flexShrink: 0,
               marginLeft: 'auto',
-              marginRight: avatarUrl ? 48 : 0,
+              marginRight: hasAvatar ? 48 : 0,
             }}
           >
             {!isOrder && onCreateOrder && firstProduct && (
@@ -1385,3 +1532,4 @@ function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
     </div>
   );
 }
+

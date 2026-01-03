@@ -4,6 +4,7 @@ import { Calendar, MapPin, Package, Percent, ChevronLeft, ChevronRight } from 'l
 import { CARD_WIDTH, CARD_HEIGHT, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { ProductResultCard } from './ProductsLanding';
+import { eurosToCents, formatEurosFromCents } from '../lib/money';
 
 interface CreateOrderFormProps {
   products: DeckCard[];
@@ -372,31 +373,36 @@ export function CreateOrderForm({
       key: 'basePrice',
       label: 'Prix de base',
       className: 'is-right',
-      render: (row: (typeof perProductRows)[number]) => `${row.basePrice.toFixed(2)} €`,
+      render: (row: (typeof perProductRows)[number]) =>
+        formatEurosFromCents(eurosToCents(row.basePrice)),
     },
     {
       key: 'logPerUnit',
       label: 'Livraison',
       className: 'is-right',
-      render: (row: (typeof perProductRows)[number]) => `${row.logPerUnit.toFixed(2)} €`,
+      render: (row: (typeof perProductRows)[number]) =>
+        formatEurosFromCents(eurosToCents(row.logPerUnit)),
     },
     {
       key: 'sharePerUnit',
       label: 'Partageur',
       className: 'is-right',
-      render: (row: (typeof perProductRows)[number]) => `${row.sharePerUnit.toFixed(2)} €`,
+      render: (row: (typeof perProductRows)[number]) =>
+        formatEurosFromCents(eurosToCents(row.sharePerUnit)),
     },
     {
       key: 'participantPrice',
       label: 'Prix final au poids minimum',
       className: 'is-right',
-      render: (row: (typeof perProductRows)[number]) => `${row.participantPrice.toFixed(2)} €`,
+      render: (row: (typeof perProductRows)[number]) =>
+        formatEurosFromCents(eurosToCents(row.participantPrice)),
     },
     {
       key: 'participantPriceComplete',
       label: 'Prix final au poids maximum',
       className: 'is-right',
-      render: (row: (typeof perProductRows)[number]) => `${row.participantPriceComplete.toFixed(2)} €`,
+      render: (row: (typeof perProductRows)[number]) =>
+        formatEurosFromCents(eurosToCents(row.participantPriceComplete)),
     },
   ];
 
@@ -1572,6 +1578,10 @@ function ProducerProductCarousel({
       >
         {productsToShow.map((product) => {
           const isSelected = selectedProducts.includes(product.id);
+          const hasPrice = Boolean(product.activeLotCode) && product.price > 0;
+          const priceLabel = hasPrice
+            ? formatEurosFromCents(eurosToCents(product.price))
+            : 'Prix a venir';
           return (
             <button
               key={product.id}
@@ -1615,11 +1625,13 @@ function ProducerProductCarousel({
                 </p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                   <span style={{ color: '#FF6B4A', fontWeight: 700, fontSize: 15 }}>
-                    {product.price.toFixed(2)} €
+                    {priceLabel}
                   </span>
-                  <span style={{ fontSize: 11, color: '#374151' }}>
-                    / {product.measurement === 'kg' ? 'Kg' : 'Unité'} ({product.unit})
-                  </span>
+                  {hasPrice ? (
+                    <span style={{ fontSize: 11, color: '#374151' }}>
+                      / {product.measurement === 'kg' ? 'Kg' : 'Unité'} ({product.unit})
+                    </span>
+                  ) : null}
                 </div>
               </div>
             </button>
