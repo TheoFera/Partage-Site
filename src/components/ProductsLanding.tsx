@@ -1004,7 +1004,10 @@ export function ProductResultCard({
       className="bg-white rounded-2xl border border-[#F1E3DA] shadow-[0_12px_30px_-18px_rgba(31,41,55,0.35)] overflow-hidden flex flex-col hover:shadow-lg transition-shadow flex-shrink-0 h-full"
       style={cardStyle}
     >
-      <div className="relative w-full overflow-hidden" style={imageStyle}>
+    <div
+      className="relative w-full overflow-hidden products-landing__group-image"
+      style={imageStyle}
+    >
         <ImageWithFallback
           src={product.imageUrl}
           alt={product.name}
@@ -1344,7 +1347,9 @@ export function ProductGroupContainer({
     if (supportsHover) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest('button')) return;
-    if (target?.closest('.product-result-card')) return;
+    const isHeaderArea = Boolean(target?.closest('.products-landing__group-header'));
+    const isImageArea = Boolean(target?.closest('.products-landing__group-image'));
+    if (!isHeaderArea && !isImageArea) return;
     setOverlayOpen((prev) => !prev);
   };
 
@@ -1352,7 +1357,7 @@ export function ProductGroupContainer({
 
   return (
     <div
-      className={`product-result-card relative overflow-hidden rounded-2xl bg-white shadow-[0_20px_50px_-28px_rgba(255,107,74,0.35)] flex flex-col h-full border transition-colors ${
+      className={`relative overflow-hidden rounded-2xl bg-white shadow-[0_20px_50px_-28px_rgba(255,107,74,0.35)] flex flex-col h-full border transition-colors ${
         selected ? 'border-2 border-[#FF6B4A]' : 'border border-[#FFE0D1]'
       }`}
       style={containerStyle}
@@ -1363,7 +1368,8 @@ export function ProductGroupContainer({
         style={{ position: 'relative', overflow: 'hidden' }}
         onMouseEnter={() => setHeaderHover(true)}
         onMouseLeave={(event) => {
-          const related = event.relatedTarget as HTMLElement | null;
+          const related =
+            event.relatedTarget instanceof Element ? event.relatedTarget : null;
           if (related?.closest('.products-landing__group-body')) {
             return;
           }
@@ -1558,13 +1564,14 @@ export function ProductGroupContainer({
       <div
         className="p-3 sm:p-4 flex-1 flex products-landing__group-body"
         style={{ padding: CONTAINER_SIDE_PADDING }}
-        onMouseEnter={(event) => {
+        onMouseEnter={() => {
           setBodyHover(true);
           setHeaderHover(true);
         }}
         onMouseLeave={(event) => {
           setBodyHover(false);
-          const related = (event.relatedTarget as HTMLElement | null);
+          const related =
+            event.relatedTarget instanceof Element ? event.relatedTarget : null;
           if (related?.closest('.products-landing__group-header')) {
             return;
           }
