@@ -85,25 +85,25 @@ const productFilterOptions = [
 const heroCategoryFilters = [
   {
     id: 'fruits-legumes',
-    label: 'Fruits et légumes',
+    label: 'Fruits & légumes',
     icon: '🥦',
     filters: ['fruits-legumes'],
   },
   {
     id: 'viandes-poissons',
-    label: 'Viandes et poissons',
+    label: 'Viandes & poissons',
     icon: '🍖',
     filters: ['viandes', 'poissons-fruits-de-mer'],
   },
   {
     id: 'cremerie-traiteur',
-    label: 'Crémerie et traiteur',
+    label: 'Crémerie & traiteur',
     icon: '🧀',
     filters: ['fromages-cremerie', 'traiteurs'],
   },
   {
     id: 'epicerie',
-    label: 'Epicerie',
+    label: 'Épicerie',
     icon: '🍯',
     filters: ['epicerie-sucree', 'epicerie-salee'],
   },
@@ -115,7 +115,7 @@ const heroCategoryFilters = [
   },
   {
     id: 'beaute-bien-etre',
-    label: 'Beauté & Bien-être',
+    label: 'Beauté & bien-être',
     icon: '🌿',
     filters: ['beaute-bien-etre'],
   },
@@ -1218,9 +1218,9 @@ export function ProductGroupContainer({
     };
     const labelParts = [
       buckets.kg.total > 0 ? `${formatQuantity(buckets.kg.total)} kg` : null,
-      buckets.unit.total > 0 ? `${formatQuantity(buckets.unit.total)} unites` : null,
+      buckets.unit.total > 0 ? `${formatQuantity(buckets.unit.total)} unités` : null,
     ].filter(Boolean);
-    const label = labelParts.length ? `${labelParts.join(' + ')} dispo` : 'Stock indisponible';
+    const label = labelParts.length ? `${labelParts.join(' + ')} disponibles` : 'Stock indisponible';
     return { ratio, label };
   }, [group.products, group.variant]);
 

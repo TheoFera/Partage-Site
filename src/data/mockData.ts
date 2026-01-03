@@ -48,7 +48,7 @@ export const mockProducts: Product[] = [
     quantity: 30,
     category: 'Fromages & Crèmerie',
     imageUrl:
-      'https://images.unsplash.com/photo-1654184750621-1110fe5afcdc?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjaGVlc2UlMjB3aGVlbHxlbnwxfHx8fDE3NjM5OTQ4ODB8MA&ixlib=rb-4.1.0&q=80&w=1080',
+      '/images/demo/chevre-frais.jpg',
     producerId: 'p2',
     producerName: 'La Chèvrerie du Bois',
     producerLocation: '25 km',
@@ -156,7 +156,7 @@ export const mockProducts: Product[] = [
     quantity: 28,
     category: 'Fromages & Crèmerie',
     imageUrl:
-      'https://images.unsplash.com/photo-1612874472278-5c1f9c2b6b70?auto=format&fit=crop&w=1080&q=80',
+      'https://images.unsplash.com/photo-1654184750621-1110fe5afcdc?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjaGVlc2UlMjB3aGVlbHxlbnwxfHx8fDE3NjM5OTQ4ODB8MA&ixlib=rb-4.1.0&q=80&w=1080',
     producerId: 'p2',
     producerName: 'La Chèvrerie du Bois',
     producerLocation: '24 km',
@@ -173,8 +173,7 @@ export const mockProducts: Product[] = [
     unit: '2 kg',
     quantity: 90,
     category: 'Fruits & Légumes',
-    imageUrl:
-      'https://images.unsplash.com/photo-1447175008436-054170c2e979?auto=format&fit=crop&w=1080&q=80',
+    imageUrl: '/images/demo/pommes-pink-lady.jpg',
     producerId: 'p3',
     producerName: 'Verger du Plateau',
     producerLocation: '9 km',
@@ -191,8 +190,7 @@ export const mockProducts: Product[] = [
     unit: '3 kg',
     quantity: 18,
     category: 'Fruits & Légumes',
-    imageUrl:
-      'https://images.unsplash.com/photo-1472145246862-b24cf25c4a36?auto=format&fit=crop&w=1080&q=80',
+    imageUrl: '/images/demo/panier-gourmand.jpg',
     producerId: 'current-user',
     producerName: 'Ma Ferme',
     producerLocation: '5 km',
@@ -209,8 +207,7 @@ export const mockProducts: Product[] = [
     unit: '400g',
     quantity: 22,
     category: 'Épicerie Sucrée',
-    imageUrl:
-      'https://images.unsplash.com/photo-1506617420156-8e4536971650?auto=format&fit=crop&w=1080&q=80',
+    imageUrl: '/images/demo/miel-cremeux.jpg',
     producerId: 'p4',
     producerName: 'Rucher des Collines',
     producerLocation: '17 km',
@@ -246,7 +243,7 @@ export const mockProducts: Product[] = [
     quantity: 60,
     category: 'Fruits & Légumes',
     imageUrl:
-      'https://images.unsplash.com/photo-1506803342862-97cd43e59f8b?auto=format&fit=crop&w=1080&q=80',
+      '/images/demo/courges-butternut.jpg',
     producerId: 'current-user',
     producerName: 'Ma Ferme',
     producerLocation: '4 km',
@@ -300,7 +297,7 @@ export const mockProducts: Product[] = [
     quantity: 36,
     category: 'Fruits & Légumes',
     imageUrl:
-      'https://images.unsplash.com/photo-1517959105821-eaf2591984c2?auto=format&fit=crop&w=1080&q=80',
+      '/images/demo/oeufs.jpg',
     producerId: 'current-user',
     producerName: 'Ma Ferme',
     producerLocation: '5 km',
@@ -317,8 +314,7 @@ export const mockProducts: Product[] = [
     unit: '250g',
     quantity: 32,
     category: 'Épicerie Sucrée',
-    imageUrl:
-      'https://images.unsplash.com/photo-1505250469679-203ad9ced0cb?auto=format&fit=crop&w=1080&q=80',
+    imageUrl: '/images/demo/confiture-framboise.jpg',
     producerId: 'p4',
     producerName: 'Rucher des Collines',
     producerLocation: '18 km',
@@ -335,8 +331,7 @@ export const mockProducts: Product[] = [
     unit: '300g',
     quantity: 27,
     category: 'Épicerie Sucrée',
-    imageUrl:
-      'https://images.unsplash.com/photo-1495197359483-d092478c170a?auto=format&fit=crop&w=1080&q=80',
+    imageUrl: '/images/demo/granola-maison.jpg',
     producerId: 'p5',
     producerName: 'Boulangerie du Village',
     producerLocation: '6 km',

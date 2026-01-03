@@ -348,7 +348,7 @@ const mapProductLabelDetails = (labels: DbLotLabel[]) => {
   labels.forEach((label) => {
     const labelValue = label.label.trim();
     if (!labelValue) return;
-    const labelRecord = label as Record<string, unknown>;
+    const labelRecord = label as unknown as Record<string, unknown>;
     const descriptionValue = labelRecord[PRODUCER_LABELS_DESCRIPTION_COLUMN];
     const description =
       typeof descriptionValue === 'string' ? descriptionValue.trim() : label.description?.trim() || undefined;
@@ -373,7 +373,7 @@ const mapProducerLabelDetails = (labels: DbProducerLabel[]) => {
     .map((label) => {
       const labelValue = label.label.trim();
       if (!labelValue) return null;
-      const labelRecord = label as Record<string, unknown>;
+      const labelRecord = label as unknown as Record<string, unknown>;
       const descriptionValue = labelRecord[PRODUCER_LABELS_DESCRIPTION_COLUMN];
       const description =
         typeof descriptionValue === 'string' ? descriptionValue.trim() : label.description?.trim() || undefined;

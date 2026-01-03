@@ -168,7 +168,7 @@ export function FiltersPopover({
         />
         {!isProfileMode && (
           <FilterGroup
-            label="Caracteristiques"
+            label="Caractéristiques"
             icon={<Leaf style={{ width: 16, height: 16 }} />}
             options={attributeOptions}
             activeValues={attributes}

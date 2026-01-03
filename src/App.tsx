@@ -2415,10 +2415,15 @@ export default function App() {
     [viewer.addressLat, viewer.addressLng]
   );
   const userAddressQuery = React.useMemo(() => {
-    if (viewer.address?.trim()) return viewer.address;
-    const cityQuery = [viewer.postcode, viewer.city].filter(Boolean).join(' ');
-    return cityQuery || undefined;
-  }, [viewer.address, viewer.city, viewer.postcode]);
+    const cityPart = [viewer.postcode, viewer.city]
+      .map((part) => (part ?? '').trim())
+      .filter(Boolean)
+      .join(' ');
+    const addressParts = [viewer.address, viewer.addressDetails, cityPart]
+      .map((value) => (value ?? '').trim())
+      .filter(Boolean);
+    return addressParts.length ? addressParts.join(', ') : undefined;
+  }, [viewer.address, viewer.addressDetails, viewer.city, viewer.postcode]);
   const discoverLocationLabel = isGuestDiscover
     ? guestLocation
       ? 'Autour de vous'
