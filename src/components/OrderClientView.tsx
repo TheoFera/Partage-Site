@@ -25,6 +25,9 @@ interface OrderClientViewProps {
   order: GroupOrder;
   onClose: () => void;
   onVisibilityChange?: (visibility: GroupOrder['visibility']) => void;
+  onAutoApproveParticipationRequestsChange?: (value: boolean) => void;
+  onAllowSharerMessagesChange?: (value: boolean) => void;
+  onAutoApprovePickupSlotsChange?: (value: boolean) => void;
   onPurchase?: (payload: { quantities: Record<string, number>; total: number; weight: number }) => void;
   initialQuantities?: Record<string, number>;
   isOwner?: boolean;
@@ -200,6 +203,9 @@ export function OrderClientView({
   isOwner = true,
   onOpenParticipantProfile,
   isAuthenticated = false,
+  onAutoApproveParticipationRequestsChange,
+  onAllowSharerMessagesChange,
+  onAutoApprovePickupSlotsChange,
 }: OrderClientViewProps) {
   const [quantities, setQuantities] = React.useState<Record<string, number>>({});
   const [participantsVisibility, setParticipantsVisibility] = React.useState<ParticipantVisibility>(
@@ -253,6 +259,10 @@ export function OrderClientView({
     () => Object.values(quantities).reduce((sum, qty) => sum + qty, 0),
     [quantities]
   );
+
+  const autoApproveParticipationRequests = Boolean(order.autoApproveParticipationRequests);
+  const allowSharerMessages = order.allowSharerMessages ?? true;
+  const autoApprovePickupSlots = Boolean(order.autoApprovePickupSlots);
 
   const totalPrice = React.useMemo(
     () =>
@@ -312,6 +322,34 @@ export function OrderClientView({
     const next = order.visibility === 'public' ? 'private' : 'public';
     onVisibilityChange?.(next);
     toast.success(`Commande rendue ${next === 'public' ? 'publique' : 'privée'}`);
+  };
+
+  const updateAutoApproveParticipationRequests = (value: boolean) => {
+    if (!isOwner || value === autoApproveParticipationRequests) return;
+    onAutoApproveParticipationRequestsChange?.(value);
+    toast.success(
+      value
+        ? 'Les demandes seront validées automatiquement directement.'
+        : 'Les demandes nécessitent désormais une validation manuelle.'
+    );
+  };
+
+  const updateAllowSharerMessages = (value: boolean) => {
+    if (!isOwner || value === allowSharerMessages) return;
+    onAllowSharerMessagesChange?.(value);
+    toast.success(
+      value ? 'Les participants potentiels peuvent vous écrire à nouveau.' : 'Les messages des participants potentiels ont été désactivés.'
+    );
+  };
+
+  const updateAutoApprovePickupSlots = (value: boolean) => {
+    if (!isOwner || value === autoApprovePickupSlots) return;
+    onAutoApprovePickupSlotsChange?.(value);
+    toast.success(
+      value
+        ? 'Les demandes de rendez-vous pour récupérer les produits seront validés directement.'
+        : 'Les demandes de rendez-vous pour récupérer les produits devront désormais être validés manuellement.'
+    );
   };
 
   const handlePurchase = () => {
@@ -476,18 +514,61 @@ export function OrderClientView({
         </button>
         <div className="flex items-center gap-2 flex-wrap">
           {isOwner && (
-            <button
-              type="button"
-              onClick={handleVisibilityToggle}
-              className={`order-client-view__visibility-button ${
-                order.visibility === 'public'
-                  ? 'order-client-view__visibility-button--public'
-                  : 'order-client-view__visibility-button--private'
-              }`}
-            >
-              {order.visibility === 'public' ? <Globe2 className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-              {order.visibility === 'public' ? 'Commande publique' : 'Commande privee'}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={handleVisibilityToggle}
+                className={`order-client-view__visibility-button ${
+                  order.visibility === 'public'
+                    ? 'order-client-view__visibility-button--public'
+                    : 'order-client-view__visibility-button--private'
+                }`}
+              >
+                {order.visibility === 'public' ? <Globe2 className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                {order.visibility === 'public' ? 'Commande publique' : 'Commande privée'}
+              </button>
+              <button
+                type="button"
+                onClick={() => updateAutoApproveParticipationRequests(!autoApproveParticipationRequests)}
+                className={`order-client-view__visibility-button ${
+                  autoApproveParticipationRequests
+                    ? 'order-client-view__visibility-button--public'
+                    : 'order-client-view__visibility-button--private'
+                }`}
+                aria-pressed={autoApproveParticipationRequests}
+                title="Validation directe ou au cas par cas des demandes de participation"
+              >
+                <span className="whitespace-nowrap text-[11px]">Validation des participants {autoApproveParticipationRequests ? 'automatique' : 'manuelle'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => updateAllowSharerMessages(!allowSharerMessages)}
+                className={`order-client-view__visibility-button ${
+                  allowSharerMessages
+                    ? 'order-client-view__visibility-button--public'
+                    : 'order-client-view__visibility-button--private'
+                }`}
+                aria-pressed={allowSharerMessages}
+                title="Autoriser ou ne pas autoriser les messages entrants des potentiels participants"
+              >
+                <span className="whitespace-nowrap text-[11px]">Messages {allowSharerMessages ? 'acceptés' : 'désactivés'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => updateAutoApprovePickupSlots(!autoApprovePickupSlots)}
+                className={`order-client-view__visibility-button ${
+                  autoApprovePickupSlots
+                    ? 'order-client-view__visibility-button--public'
+                    : 'order-client-view__visibility-button--private'
+                }`}
+                aria-pressed={autoApprovePickupSlots}
+                title="Validation directe ou au cas par cas des demandes de rendez-vous pour la récupération des produits"
+              >
+                <span >
+                  Validation des rendez-vous {autoApprovePickupSlots ? 'automatique' : 'manuelle'}
+                </span>
+              </button>
+            </>
           )}
         </div>
       </div>

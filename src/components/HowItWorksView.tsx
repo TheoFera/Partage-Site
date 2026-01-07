@@ -116,7 +116,7 @@ export function HowItWorksView() {
           <article className="how-card">
             <h3 className="how-card__title">1) Je cherche des produits qui m'intéressent</h3>
             <p className="how-card__text">
-              Via les pages{' '}
+              Sur le site en allant sur les pages{' '}
               <Link to="/" className="how-inline-link">
                 Produits
               </Link>
@@ -127,8 +127,8 @@ export function HowItWorksView() {
               ou{' '}
               <Link to="/decouvrir" className="how-inline-link">
                 Découvrir
-              </Link>{' '}
-              je repère des commandes autours de chez moi.
+              </Link>,{' '}
+              je repère des commandes près de chez moi.
             </p>
           </article>
 
@@ -142,11 +142,11 @@ export function HowItWorksView() {
                 loading="lazy"
               />
               <p className="how-card__text">
-                Je sélectionne les quantités souhaitées, puis je procéde au réglement.
+                Je sélectionne les quantités souhaitées, puis je procède au réglement.
               </p>
             </article>
             <article className="how-card">
-              <h3 className="how-card__title">Et si je ne trouve pas de commande qui me corresponde ?</h3>
+              <h3 className="how-card__title">Et si je ne trouve pas de commande qui me convient ?</h3>
               <p className="how-card__text">
                 Vous pouvez la créer vous même !
               </p>
@@ -175,18 +175,18 @@ export function HowItWorksView() {
               <ul className="how-closure__list">
                 <li className="how-closure__item">
                   <span className="how-closure__dot" aria-hidden="true" />
-                  <span>Si le seuil maximum est atteint : la commande se clôture tout de suite.</span>
+                  <span>Si la commande a atteints son volume maximum : la commande se clôture tout de suite.</span>
                 </li>
                 <li className="how-closure__item">
                   <span className="how-closure__dot" aria-hidden="true" />
                   <span>
-                    Sinon, à la date de clôture : la commande se valide si le seuil minimum est atteint.
+                    Sinon, à la date de clôture : la commande est validé si les volumes minimum demandés par le producteur sont atteints.
                   </span>
                 </li>
                 <li className="how-closure__item">
                   <span className="how-closure__dot" aria-hidden="true" />
                   <span>
-                    Si le seuil minimum n’est pas atteint : la commande ne part pas et les participants sont remboursés
+                    Si les volumes minimums ne sont pas atteints : la commande ne part pas et les participants sont remboursés
                   </span>
                 </li>
               </ul>
@@ -262,7 +262,7 @@ export function HowItWorksView() {
                 <li>Le poids minimum ou maximum de la commande </li>
                 <li>La date de cloture de la commande</li>
                 <li>La part que je veux conserver de la commande</li>
-                <li>Les conditions de retrait : périodes de disponibilités pour que les participants sachent quand ils pourront récupérer leurs produits ainsi que le lieu de récupération (par défaut chez moi)</li>
+                <li>Les conditions de retrait : périodes de disponibilités pour que les participants sachent quand ils pourront récupérer leurs produits ainsi que le lieu de récupération</li>
                 <li>Le mode de livraison des produits, qui peut se faire de 3 façons, faisant varier le calcul des frais de livraison :</li>
                 </ul>
             </p>
@@ -306,7 +306,7 @@ export function HowItWorksView() {
           <article className="how-card">
             <h3 className="how-card__title">6) Les participants viennent retirer leurs produits</h3>
             <p className="how-card__text">
-              Et en échange vous en gardez une part gratuitement.
+              Et en échange le créateur de la commande garde la partie qu'il avait sélectionné.
             </p>
           </article>
         </div>

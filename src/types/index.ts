@@ -53,6 +53,8 @@ export interface LegalEntity {
   producerDeliveryDays?: DeliveryDay[];
   producerDeliveryMinWeight?: number;
   producerDeliveryMaxWeight?: number;
+  producerDeliveryRadiusKm?: number;
+  producerDeliveryFee?: number;
   producerPickupEnabled?: boolean;
   producerPickupDays?: DeliveryDay[];
   producerPickupStartTime?: string;
@@ -109,6 +111,9 @@ export interface GroupOrder {
   message: string;
   status: 'open' | 'closed' | 'completed';
   visibility: 'public' | 'private';
+  autoApproveParticipationRequests?: boolean;
+  allowSharerMessages?: boolean;
+  autoApprovePickupSlots?: boolean;
   totalValue: number;
   participants: number;
   pickupSlots?: Array<{
@@ -118,6 +123,7 @@ export interface GroupOrder {
     end?: string;
     label?: string;
   }>;
+  pickupDeliveryFee?: number;
   mapLocation?: {
     lat: number;
     lng: number;

@@ -39,18 +39,18 @@ type DeliveryOption = 'chronofresh' | 'producer_delivery' | 'producer_pickup';
 const deliveryOptions: Array<{ id: DeliveryOption; title: string; description: string }> = [
   {
     id: 'chronofresh',
-    title: 'Option 1 - Expedition Chronofresh (geree par le site)',
-    description: "Le site gere l'expedition. Pratique si le producteur est loin.",
+    title: 'Option 1 - Expedition Chronofresh',
+    description: "Le site gère l'expedition via chronofresh. Pratique si le producteur est loin.",
   },
   {
     id: 'producer_delivery',
-    title: 'Option 2 - Livraison par le producteur (si proposee)',
-    description: 'Certains producteurs livrent dans certaines zones.',
+    title: 'Option 2 - Livraison par le producteur',
+    description: 'Si cette option vous est proposée, le producteur livre dans votre zone.',
   },
   {
     id: 'producer_pickup',
-    title: 'Option 3 - Collecte chez le producteur par le partageur',
-    description: 'Le partageur va chercher les produits, pas de frais de livraison.',
+    title: 'Option 3 - Collecter vous-même les produits',
+    description: 'Vous allez chercher les produits chez le producteur (pas de frais de livraison).',
   },
 ];
 
@@ -78,6 +78,22 @@ function getProductWeightKg(product: DeckCard) {
   return 0.25;
 }
 
+type GeoPoint = { lat: number; lng: number };
+
+const toRadians = (value: number) => (value * Math.PI) / 180;
+
+const distanceKm = (from: GeoPoint, to: GeoPoint) => {
+  const earthRadius = 6371;
+  const dLat = toRadians(to.lat - from.lat);
+  const dLng = toRadians(to.lng - from.lng);
+  const lat1 = toRadians(from.lat);
+  const lat2 = toRadians(to.lat);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const a = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
+  return 2 * earthRadius * Math.asin(Math.min(1, Math.sqrt(a)));
+};
+
 export function CreateOrderForm({
   products,
   onCreateOrder,
@@ -90,6 +106,9 @@ export function CreateOrderForm({
   const [title, setTitle] = React.useState('');
   const [visibility, setVisibility] = React.useState<'public' | 'private'>('public');
   const [sharerPercentage, setSharerPercentage] = React.useState(8);
+  const [autoApproveParticipationRequests, setAutoApproveParticipationRequests] = React.useState(false);
+  const [allowSharerMessages, setAllowSharerMessages] = React.useState(true);
+  const [autoApprovePickupSlots, setAutoApprovePickupSlots] = React.useState(false);
   const [minWeight, setMinWeight] = React.useState(5);
   const [maxWeight, setMaxWeight] = React.useState(20);
   const [deadline, setDeadline] = React.useState('');
@@ -101,6 +120,7 @@ export function CreateOrderForm({
   const [deliveryCity, setDeliveryCity] = React.useState('');
   const [deliveryPostcode, setDeliveryPostcode] = React.useState('');
   const [deliveryOption, setDeliveryOption] = React.useState<DeliveryOption>('chronofresh');
+  const [pickupDeliveryFee, setPickupDeliveryFee] = React.useState(0);
   const [useSamePickupAddress, setUseSamePickupAddress] = React.useState(true);
   const [usePickupDate, setUsePickupDate] = React.useState(false);
   const [pickupDate, setPickupDate] = React.useState('');
@@ -111,6 +131,8 @@ export function CreateOrderForm({
   const [pickupSlots, setPickupSlots] = React.useState<PickupSlot[]>(defaultSlots);
   const [pickupWindowWeeks, setPickupWindowWeeks] = React.useState(2);
   const [pickupDateSlots, setPickupDateSlots] = React.useState<PickupSlot[]>([]);
+  const [deliveryGeoStatus, setDeliveryGeoStatus] = React.useState<'idle' | 'loading' | 'resolved' | 'error'>('idle');
+  const [deliveryGeoCoords, setDeliveryGeoCoords] = React.useState<GeoPoint | null>(null);
 
   const producerLegal = producer?.legalEntity;
   const deliveryOptionConfig = React.useMemo(
@@ -137,8 +159,122 @@ export function CreateOrderForm({
     [producerLegal]
   );
 
+  const deliveryAddressQuery = React.useMemo(() => {
+    const parts = [deliveryStreet, deliveryPostcode, deliveryCity]
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return parts.join(', ');
+  }, [deliveryCity, deliveryPostcode, deliveryStreet]);
+  const isDeliveryAddressComplete = Boolean(
+    deliveryStreet.trim() && deliveryPostcode.trim() && deliveryCity.trim()
+  );
+
+  const producerCoords = React.useMemo(() => {
+    const lat = producer?.addressLat;
+    const lng = producer?.addressLng;
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { lat: Number(lat), lng: Number(lng) };
+    }
+    return null;
+  }, [producer?.addressLat, producer?.addressLng]);
+
+  const normalizedProducerDeliveryRadiusKm = Number.isFinite(producerLegal?.producerDeliveryRadiusKm ?? NaN)
+    ? Math.max(0, producerLegal?.producerDeliveryRadiusKm ?? 0)
+    : 0;
+  const shouldCheckDeliveryZone = Boolean(producerLegal?.producerDeliveryEnabled);
+  const shouldGeocodeDeliveryAddress = shouldCheckDeliveryZone && normalizedProducerDeliveryRadiusKm > 0;
+
+  const deliveryDistanceKm = React.useMemo(() => {
+    if (!producerCoords || !deliveryGeoCoords) return null;
+    return distanceKm(producerCoords, deliveryGeoCoords);
+  }, [producerCoords, deliveryGeoCoords]);
+
+  const deliveryZoneInfo = React.useMemo(() => {
+    if (!shouldCheckDeliveryZone) return { within: true, reason: undefined };
+    if (normalizedProducerDeliveryRadiusKm <= 0) {
+      return { within: false, reason: 'Zone de livraison non definie.' };
+    }
+    if (!producerCoords) {
+      return { within: false, reason: 'Adresse producteur manquante.' };
+    }
+    if (!isDeliveryAddressComplete) {
+      return { within: false, reason: 'Adresse de livraison incomplete.' };
+    }
+    if (deliveryGeoStatus === 'loading' || deliveryGeoStatus === 'idle') {
+      return { within: false, reason: "Verification de l'adresse en cours." };
+    }
+    if (deliveryGeoStatus === 'error' || !deliveryGeoCoords) {
+      return { within: false, reason: 'Adresse de livraison introuvable.' };
+    }
+    if (deliveryDistanceKm === null) {
+      return { within: false, reason: 'Zone de livraison non verifiee.' };
+    }
+    if (deliveryDistanceKm <= normalizedProducerDeliveryRadiusKm) {
+      return { within: true, reason: undefined };
+    }
+    return {
+      within: false,
+      reason: `Adresse hors zone (${deliveryDistanceKm.toFixed(1)} km > ${normalizedProducerDeliveryRadiusKm} km).`,
+    };
+  }, [
+    deliveryDistanceKm,
+    deliveryGeoCoords,
+    deliveryGeoStatus,
+    isDeliveryAddressComplete,
+    normalizedProducerDeliveryRadiusKm,
+    producerCoords,
+    shouldCheckDeliveryZone,
+  ]);
+
   const selectedProductsData = products.filter((p) => selectedProducts.includes(p.id));
-  const enabledDeliveryOptions = deliveryOptions.filter((option) => deliveryOptionConfig[option.id]?.enabled);
+  const deliveryOptionStates = React.useMemo(() => {
+    const orderMinWeight = Number.isFinite(minWeight) ? minWeight : 0;
+    const orderMaxWeight = Number.isFinite(maxWeight) ? maxWeight : 0;
+
+    const resolveWeightMatch = (minLimit?: number, maxLimit?: number) => {
+      const minReq = Number.isFinite(minLimit ?? NaN) ? (minLimit ?? 0) : 0;
+      const maxReq = Number.isFinite(maxLimit ?? NaN) ? (maxLimit ?? 0) : 0;
+
+      if (minReq > 0 && orderMinWeight < minReq) {
+        return { ok: false, reason: `Poids min requis: ${minReq} kg.` };
+      }
+      if (maxReq > 0 && orderMinWeight > maxReq) {
+        return { ok: false, reason: `Poids min doit etre <= ${maxReq} kg.` };
+      }
+      if (maxReq > 0) {
+        if (orderMaxWeight <= 0) {
+          return { ok: false, reason: `Definissez un poids max <= ${maxReq} kg.` };
+        }
+        if (orderMaxWeight > maxReq) {
+          return { ok: false, reason: `Poids max autorise: ${maxReq} kg.` };
+        }
+      }
+      return { ok: true };
+    };
+
+    return deliveryOptions.reduce((acc, option) => {
+      const optionConfig = deliveryOptionConfig[option.id];
+      const authorized = optionConfig?.enabled ?? true;
+      let eligible = authorized;
+      let reason: string | undefined;
+      if (!authorized) {
+        reason = 'Non propose par le producteur.';
+      } else {
+        const weightCheck = resolveWeightMatch(optionConfig?.minWeight, optionConfig?.maxWeight);
+        if (!weightCheck.ok) {
+          eligible = false;
+          reason = weightCheck.reason;
+        } else if (option.id === 'producer_delivery' && !deliveryZoneInfo.within) {
+          eligible = false;
+          reason = deliveryZoneInfo.reason ?? 'Adresse hors zone.';
+        }
+      }
+      acc[option.id] = { eligible, reason };
+      return acc;
+    }, {} as Record<DeliveryOption, { eligible: boolean; reason?: string }>);
+  }, [deliveryOptionConfig, deliveryZoneInfo, maxWeight, minWeight]);
+
+  const enabledDeliveryOptions = deliveryOptions.filter((option) => deliveryOptionStates[option.id]?.eligible);
   const activeDeliveryConfig = deliveryOptionConfig[deliveryOption] ?? deliveryOptionConfig.chronofresh;
   const minWeightLimit = activeDeliveryConfig?.minWeight ?? 0;
   const maxWeightLimit = activeDeliveryConfig?.maxWeight ?? 0;
@@ -165,7 +301,7 @@ export function CreateOrderForm({
     return 'Aucun seuil';
   };
   const formatDaysList = (days?: DeliveryDay[]) => {
-    if (!days || days.length === 0) return 'Jours a definir';
+    if (!days || days.length === 0) return 'Jours à définir';
     return days.map((day) => deliveryDayLabels[day]).join(', ');
   };
   const dayIndexMap: Record<DeliveryDay, number> = {
@@ -195,12 +331,12 @@ export function CreateOrderForm({
   const pickupHoursLabel =
     producerLegal?.producerPickupStartTime && producerLegal?.producerPickupEndTime
       ? `${producerLegal.producerPickupStartTime} - ${producerLegal.producerPickupEndTime}`
-      : 'Horaires a definir';
+      : 'Horaires à définir';
   const deliveryRuleLabel = (() => {
     if (deliveryOption === 'producer_delivery') {
       return producerLegal?.producerDeliveryDays?.length
         ? `Livraison producteur: ${formatDaysList(producerLegal.producerDeliveryDays)}`
-        : 'Jours de livraison a definir';
+        : 'Jours de livraison à définir';
     }
     if (deliveryOption === 'producer_pickup') {
       if (producerLegal?.producerPickupDays?.length) {
@@ -271,9 +407,19 @@ export function CreateOrderForm({
     return Math.max(15, 5 * Math.round(raw / 5));
   };
 
-  const logTotal = effectiveWeight > 0 ? logisticCostByWeight(effectiveWeight) : 0;
+  const normalizedProducerDeliveryFee = Number.isFinite(producerLegal?.producerDeliveryFee ?? NaN)
+    ? Math.max(0, producerLegal?.producerDeliveryFee ?? 0)
+    : 0;
+  const normalizedPickupDeliveryFee = Number.isFinite(pickupDeliveryFee) ? Math.max(0, pickupDeliveryFee) : 0;
+  const resolveDeliveryFee = (weightKg: number) => {
+    if (deliveryOption === 'producer_delivery') return normalizedProducerDeliveryFee;
+    if (deliveryOption === 'producer_pickup') return normalizedPickupDeliveryFee;
+    return logisticCostByWeight(weightKg);
+  };
+
+  const logTotal = effectiveWeight > 0 ? resolveDeliveryFee(effectiveWeight) : 0;
   const logPerKg = effectiveWeight > 0 ? logTotal / effectiveWeight : 0;
-  const logPerKgComplete = completeWeight > 0 ? logisticCostByWeight(completeWeight) / completeWeight : 0;
+  const logPerKgComplete = completeWeight > 0 ? resolveDeliveryFee(completeWeight) / completeWeight : 0;
   const estimatedDeliveryDate = React.useMemo(() => {
     if (!deadline) return null;
     const baseDate = new Date(deadline);
@@ -356,8 +502,8 @@ export function CreateOrderForm({
   const shareMultiplier = shareFraction > 0 ? shareFraction / (1 - shareFraction) : 0;
   const minShareWeight = safeMinWeight > 0 ? safeMinWeight : effectiveWeight;
   const maxShareWeight = safeMaxWeight > 0 ? safeMaxWeight : completeWeight;
-  const logPerKgAtMin = minShareWeight > 0 ? logisticCostByWeight(minShareWeight) / minShareWeight : 0;
-  const logPerKgAtMax = maxShareWeight > 0 ? logisticCostByWeight(maxShareWeight) / maxShareWeight : 0;
+  const logPerKgAtMin = minShareWeight > 0 ? resolveDeliveryFee(minShareWeight) / minShareWeight : 0;
+  const logPerKgAtMax = maxShareWeight > 0 ? resolveDeliveryFee(maxShareWeight) / maxShareWeight : 0;
   const minShareAtThreshold =
     minShareWeight > 0 ? (minPricePerKg + logPerKgAtMin) * shareMultiplier * minShareWeight : 0;
   const maxShareAtThreshold =
@@ -415,6 +561,8 @@ export function CreateOrderForm({
         .filter(Boolean)
         .join(', ');
   const selectedDeliveryOption = deliveryOptions.find((option) => option.id === deliveryOption);
+  const selectedDeliveryOptionState = deliveryOptionStates[deliveryOption];
+  const isDeliveryOptionValid = selectedDeliveryOptionState?.eligible ?? true;
 
   const groupedByProducer = products.reduce((acc, card) => {
     const producerId = card.producerId;
@@ -429,6 +577,27 @@ export function CreateOrderForm({
   }, {} as Record<string, { producerName: string; products: DeckCard[] }>);
 
   const canReceiveCashShare = user?.accountType ? user.accountType !== 'individual' : false;
+
+  const participantOptionBaseClass =
+    'flex-1 min-w-[160px] px-4 py-2 rounded-full border-2 text-sm font-semibold transition-colors';
+
+  const optionButtonClass = (active: boolean) =>
+    `${participantOptionBaseClass} ${
+      active
+        ? 'border-[#28C1A5] bg-[#28C1A5]/10 text-[#0F5132]'
+        : 'border-gray-200 text-[#1F2937] hover:border-[#FF6B4A]'
+    }`;
+
+  const visibilityButtonClass = (option: 'public' | 'private') => {
+    const baseActiveClass =
+      option === 'public'
+        ? 'border-[#28C1A5] bg-[#28C1A5]/10 text-[#0F5132]'
+        : 'border-[#FF6B4A] bg-[#FF6B4A]/10 text-[#B45309]';
+
+    return `${participantOptionBaseClass} ${
+      visibility === option ? baseActiveClass : 'border-gray-200 text-[#1F2937] hover:border-[#FFD166]'
+    }`;
+  };
 
   React.useEffect(() => {
     if (preselectedProductIds && preselectedProductIds.length > 0) {
@@ -460,11 +629,55 @@ export function CreateOrderForm({
   }, [canReceiveCashShare, shareMode]);
 
   React.useEffect(() => {
+    if (!shouldGeocodeDeliveryAddress || !isDeliveryAddressComplete) {
+      setDeliveryGeoCoords(null);
+      setDeliveryGeoStatus('idle');
+      return;
+    }
+    let isActive = true;
+    const controller = new AbortController();
+    setDeliveryGeoStatus('loading');
+    fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(deliveryAddressQuery)}&limit=1`,
+      {
+        signal: controller.signal,
+        headers: {
+          'Accept-Language': 'fr',
+        },
+      }
+    )
+      .then((res) => res.json())
+      .then((results) => {
+        if (!isActive) return;
+        const candidate = Array.isArray(results) ? results[0] : null;
+        const lat = Number(candidate?.lat);
+        const lng = Number(candidate?.lon);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          setDeliveryGeoCoords({ lat, lng });
+          setDeliveryGeoStatus('resolved');
+        } else {
+          setDeliveryGeoCoords(null);
+          setDeliveryGeoStatus('error');
+        }
+      })
+      .catch(() => {
+        if (!isActive) return;
+        setDeliveryGeoCoords(null);
+        setDeliveryGeoStatus('error');
+      });
+
+    return () => {
+      isActive = false;
+      controller.abort();
+    };
+  }, [deliveryAddressQuery, isDeliveryAddressComplete, shouldGeocodeDeliveryAddress]);
+
+  React.useEffect(() => {
     if (enabledDeliveryOptions.length === 0) return;
-    if (!deliveryOptionConfig[deliveryOption]?.enabled) {
+    if (!deliveryOptionStates[deliveryOption]?.eligible) {
       setDeliveryOption(enabledDeliveryOptions[0].id);
     }
-  }, [deliveryOption, deliveryOptionConfig, enabledDeliveryOptions]);
+  }, [deliveryOption, deliveryOptionStates, enabledDeliveryOptions]);
 
   React.useEffect(() => {
     const nextMin = clampWeightToRange(minWeight, minWeightLimit, maxWeightLimit);
@@ -528,6 +741,11 @@ export function CreateOrderForm({
       alert('Veuillez sélectionner au moins un produit');
       return;
     }
+ 
+    if (!isDeliveryOptionValid) {
+      alert(selectedDeliveryOptionState?.reason ?? 'Option de livraison indisponible.');
+      return;
+    }
 
     const activeSlots = usePickupDate
       ? []
@@ -543,6 +761,9 @@ export function CreateOrderForm({
       title,
       products: selectedProductsData,
       visibility,
+      autoApproveParticipationRequests,
+      allowSharerMessages,
+      autoApprovePickupSlots,
       sharerPercentage,
       shareMode,
       shareQuantities,
@@ -569,6 +790,7 @@ export function CreateOrderForm({
       pickupPostcode: useSamePickupAddress ? deliveryPostcode : pickupPostcode,
       pickupAddress,
       pickupSlots: activeSlots,
+      pickupDeliveryFee: deliveryOption === 'producer_pickup' ? pickupDeliveryFee : 0,
       pickupDate: usePickupDate && pickupDate ? new Date(pickupDate) : null,
       totals: {
         baseTotal: perProductRows.reduce((sum, r) => sum + r.basePrice, 0),
@@ -596,15 +818,15 @@ export function CreateOrderForm({
 
   const renderPickupLine = () => {
     if (usePickupDate) {
-      if (!pickupDate) return 'Date precise a definir';
+      if (!pickupDate) return 'Date precise à définir';
       return new Date(pickupDate).toLocaleDateString('fr-FR');
     }
     if (visibility === 'public') {
-      if (!pickupWindowRange) return 'Date de livraison a definir';
+      if (!pickupWindowRange) return 'Date de livraison à définir';
       return `Du ${pickupWindowRange.start.toLocaleDateString('fr-FR')} au ${pickupWindowRange.end.toLocaleDateString('fr-FR')}`;
     }
     const active = pickupSlots.filter((slot) => slot.enabled);
-    if (active.length === 0) return 'Non precise';
+    if (active.length === 0) return 'Non precisé';
     return active
       .map((slot) => `${slot.label} ${slot.start || '??'}-${slot.end || '??'}`)
       .join(' / ');
@@ -621,15 +843,12 @@ export function CreateOrderForm({
         <div className="space-y-6">
           <div className="bg-white rounded-xl p-6 shadow-sm">
             <h3 className="text-[#1F2937] mb-4">
-              Sélectionnez les produits de {Object.entries(groupedByProducer)[0]?.[1]?.producerName ?? ''} a inclure dans la commande
+              Sélectionnez les produits de {Object.entries(groupedByProducer)[0]?.[1]?.producerName ?? ''} à inclure dans la commande
             </h3>
 
             <div className="space-y-6">
-      {Object.entries(groupedByProducer).map(([producerId, group]) => (
-        <div key={producerId} className="space-y-2">
-          <p className="text-sm text-[#6B7280]" style={{ fontWeight: 500 }}>
-            
-          </p>
+              {Object.entries(groupedByProducer).map(([producerId, group]) => (
+                <div key={producerId} className="space-y-2">
                   <ProducerProductCarousel
                     products={group.products}
                     selectedProducts={selectedProducts}
@@ -646,10 +865,14 @@ export function CreateOrderForm({
           </div>
 
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
-            <h3 className="text-[#1F2937] text-base font-semibold">Paramètres généraux de la commande</h3>
+            <div>
+              <h3 className="text-[#1F2937] text-base font-semibold">Paramètres d'échanges avec les participants</h3>
+              <p className="text-sm text-[#6B7280]">
+                Gérez la visibilité de la commande et les préférences de contact pour les partageurs.
+              </p>
+            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
+            <div>
                 <label className="block text-sm text-[#6B7280] mb-2">Nom de la commande</label>
                 <input
                   type="text"
@@ -661,53 +884,96 @@ export function CreateOrderForm({
                 />
               </div>
 
-              <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Date de cloture de la commande</label>
-                <div className="relative">
-                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
-                  <input
-                    type="date"
-                    value={deadline}
-                    onChange={(e) => setDeadline(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                  />
+              <div className="rounded-xl border border-gray-200 bg-white p-4">
+                <label>Visibilité de la commande</label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setVisibility('public')}
+                    className={visibilityButtonClass('public')}
+                  >
+                    Commande publique
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVisibility('private')}
+                    className={visibilityButtonClass('private')}
+                  >
+                    Commande privée
+                  </button>
                 </div>
+                <p className="text-xs text-[#6B7280] mt-2">
+                  Les commandes privées ne sont trouvables que par le lien de la commande.
+                </p>
               </div>
-            </div>
 
-            <div>
-              <label className="block text-sm text-[#6B7280] mb-2">Visibilité de la commande</label>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setVisibility('public')}
-                  className={`flex-1 min-w-[160px] px-4 py-2 rounded-lg border-2 text-sm transition-colors ${
-                    visibility === 'public'
-                      ? 'border-[#28C1A5] bg-[#28C1A5]/10 text-[#0F5132]'
-                      : 'border-gray-200 text-[#1F2937] hover:border-[#FFD166]'
-                  }`}
-                >
-                  Commande publique
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setVisibility('private')}
-                  className={`flex-1 min-w-[160px] px-4 py-2 rounded-lg border-2 text-sm transition-colors ${
-                    visibility === 'private'
-                      ? 'border-[#FF6B4A] bg-[#FF6B4A]/10 text-[#B45309]'
-                      : 'border-gray-200 text-[#1F2937] hover:border-[#FFD166]'
-                  }`}
-                >
-                  Commande privée
-                </button>
-              </div>
-              <p className="text-xs text-[#6B7280] mt-2">
-                Les commandes privées ne sont trouvables que par le lien de la commande.
-              </p>
-            </div>
-
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <p>Validation des participants à la commande</p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setAutoApproveParticipationRequests(true)}
+                      className={optionButtonClass(autoApproveParticipationRequests)}
+                    >
+                      Automatique
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAutoApproveParticipationRequests(false)}
+                      className={optionButtonClass(!autoApproveParticipationRequests)}
+                    >
+                      Manuelle
+                    </button>
+                  </div>
+                  <p className="text-xs text-[#6B7280] mt-2">
+                    La validation des demandes de participation à la commande peut se faire directement ou au cas par cas par vous.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <p>Messages de potentiels participants à la commande</p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setAllowSharerMessages(true)}
+                      className={optionButtonClass(allowSharerMessages)}
+                    >
+                      Acceptés
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAllowSharerMessages(false)}
+                      className={optionButtonClass(!allowSharerMessages)}
+                    >
+                      Désactivés
+                    </button>
+                  </div>
+                  <p className="text-xs text-[#6B7280] mt-2">
+                    Si les messages sont acceptés, vous pourrez recevoir des messages privés de personnes souhaitant, par exemple, participer à la commande mais ayant des questions.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <p>Validation des rendez-vous de récupération des produits</p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setAutoApprovePickupSlots(true)}
+                      className={optionButtonClass(autoApprovePickupSlots)}
+                    >
+                      Automatique
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAutoApprovePickupSlots(false)}
+                      className={optionButtonClass(!autoApprovePickupSlots)}
+                    >
+                      Manuelle
+                    </button>
+                  </div>
+                  <p className="text-xs text-[#6B7280] mt-2">
+                    La validation des demandes de rendez-vous proposées par les participants peut se faire directement ou au cas par cas par vous.
+                  </p>
+                </div>
           </div>
-
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
             <div>
               <h3 className="text-[#1F2937] text-base font-semibold">Livraison</h3>
@@ -738,7 +1004,7 @@ export function CreateOrderForm({
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                 />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="sm:col-span-2">
                   <input
                     type="text"
@@ -763,52 +1029,6 @@ export function CreateOrderForm({
               </div>
             </div>
 
-            <div className="space-y-2">
-              <label>Option de livraison</label>
-              <div>
-                {deliveryOptions.map((option) => {
-                  const optionConfig = deliveryOptionConfig[option.id];
-                  const isEnabled = optionConfig?.enabled ?? true;
-                  return (
-                    <label key={option.id} style={{ display: 'block', marginBottom: 8 }}>
-                      <input
-                        type="radio"
-                        name="deliveryOption"
-                        value={option.id}
-                        checked={deliveryOption === option.id}
-                        onChange={() => setDeliveryOption(option.id)}
-                        disabled={!isEnabled}
-                        style={{ marginRight: 8 }}
-                      />
-                      <span style={{ fontWeight: 600 }}>{option.title}</span>
-                      <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>{option.description}</div>
-                      {!isEnabled ? (
-                        <div style={{ fontSize: 12, color: '#B45309', marginTop: 4 }}>
-                          Non propose par le producteur.
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
-                          {(option.id === 'producer_delivery' || option.id === 'producer_pickup') && (
-                            <div>Jours : {formatDaysList(optionConfig?.days)}</div>
-                          )}
-                          {option.id === 'chronofresh' && (
-                            <div>
-                              Delai :{' '}
-                              {fallbackLeadType === 'fixed_day'
-                                ? `Jour fixe ${deliveryDayLabels[fallbackLeadFixedDay]}`
-                                : `J+${fallbackLeadDays}`}
-                            </div>
-                          )}
-                          {option.id === 'producer_pickup' && <div>Horaires : {pickupHoursLabel}</div>}
-                          <div>Seuils : {formatWeightRange(optionConfig?.minWeight, optionConfig?.maxWeight)}</div>
-                        </div>
-                      )}
-                    </label>
-                  );
-                })}
-              </div>
-              {enabledDeliveryOptions.length === 0 && <p>Aucune option active sur le profil producteur.</p>}
-            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm text-[#6B7280] mb-2">Poids minimum de la commande</label>
@@ -843,56 +1063,178 @@ export function CreateOrderForm({
                 />
               </div>
             </div>
+
+            <div className="space-y-2">
+              <label>Option de livraison</label>
+              <div>
+                {deliveryOptions.map((option) => {
+                  const optionConfig = deliveryOptionConfig[option.id];
+                  const optionState = deliveryOptionStates[option.id];
+                  const isEnabled = optionState?.eligible ?? true;
+                  return (
+                    <label key={option.id} style={{ display: 'block', marginBottom: 8 }}>
+                      <input
+                        type="radio"
+                        name="deliveryOption"
+                        value={option.id}
+                        checked={deliveryOption === option.id}
+                        onChange={() => setDeliveryOption(option.id)}
+                        disabled={!isEnabled}
+                        style={{ marginRight: 8 }}
+                      />
+                      <span style={{ fontWeight: 600 }}>{option.title}</span>
+                      <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>{option.description}</div>
+                      <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
+                        {(option.id === 'producer_delivery' || option.id === 'producer_pickup') && (
+                          <div>Jours : {formatDaysList(optionConfig?.days)}</div>
+                        )}
+                        {option.id === 'chronofresh' && (
+                          <div>
+                            Delai :{' '}
+                            {fallbackLeadType === 'fixed_day'
+                              ? `Jour fixe ${deliveryDayLabels[fallbackLeadFixedDay]}`
+                              : `J+${fallbackLeadDays}`}
+                          </div>
+                        )}
+                        {option.id === 'producer_pickup' && <div>Horaires : {pickupHoursLabel}</div>}
+                        <div>Seuils : {formatWeightRange(optionConfig?.minWeight, optionConfig?.maxWeight)}</div>
+                      </div>
+                      {!isEnabled && optionState?.reason ? (
+                        <div style={{ fontSize: 12, color: '#B45309', marginTop: 4 }}>
+                          {optionState.reason}
+                        </div>
+                      ) : null}
+                    </label>
+                  );
+                })}
+              </div>
+              {enabledDeliveryOptions.length === 0 && (
+                <p className="text-xs text-[#B45309]">Aucune option disponible pour les criteres actuels.</p>
+              )}
+            </div>
+            {deliveryOption === 'producer_pickup' && (
+                <div className="space-y-2">
+                  <label className="block text-sm text-[#6B7280] mb-2">Frais que vous prendrez pour aller chercher la commande chez le producteur (en €)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={pickupDeliveryFee}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setPickupDeliveryFee(Number.isFinite(next) ? Math.max(0, next) : 0);
+                    }}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                  <p className="text-xs text-[#6B7280]">
+                    Indiquez 0€ si vous ne prenez pas de frais.
+                  </p>
+                </div>
+              )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              
+            </div>
             {(minWeightLimit > 0 || maxWeightLimit > 0) && (
               <p className="text-xs text-[#6B7280]">
                 Seuils producteur pour cette option : {formatWeightRange(minWeightLimit, maxWeightLimit)}.
               </p>
             )}
 
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-3">
-                {deliveryOption === 'chronofresh' ? (
-                  <>
-                    <label className="block text-sm text-[#6B7280]">Delai Chronofresh apres cloture</label>
-                    <div className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-white text-[#1F2937]">
-                      {deliveryRuleLabel}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <label className="block text-sm text-[#6B7280]">
-                      {deliveryOption === 'producer_delivery'
-                        ? 'Jours de livraison producteur'
-                        : 'Jours de retrait producteur'}
-                    </label>
-                    <div className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-white text-[#1F2937]">
-                      {deliveryRuleLabel}
-                    </div>
-                  </>
-                )}
+            <div>
+                <label className="block text-sm text-[#6B7280] mb-2">Date de clôture de la commande</label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
+                  <input
+                    type="date"
+                    value={deadline}
+                    onChange={(e) => setDeadline(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
               </div>
-              <div className="bg-[#F9FAFB] rounded-xl border border-gray-200 p-4 text-sm text-[#6B7280] space-y-2">
-                <p className="text-[#1F2937] font-semibold">Date de livraison estimee</p>
-                <p>
-                  {estimatedDeliveryDate
-                    ? estimatedDeliveryDate.toLocaleDateString('fr-FR')
-                    : 'Selectionnez une date de cloture pour estimer la livraison.'}
-                </p>
-                <p className="text-xs text-[#6B7280]">
-                  Basee sur la date de cloture de la commande et le mode de livraison selectionne.
-                </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-3">
+                  {deliveryOption === 'chronofresh' ? (
+                    <>
+                      <label className="block text-sm text-[#6B7280]">Délai Chronofresh apres clôture</label>
+                      <div className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-white text-[#1F2937]">
+                        {deliveryRuleLabel}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <label className="block text-sm text-[#6B7280]">
+                        {deliveryOption === 'producer_delivery'
+                          ? 'Jours de livraison producteur'
+                          : 'Jours de retrait producteur'}
+                      </label>
+                      <div className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-white text-[#1F2937]">
+                        {deliveryRuleLabel}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="bg-[#F9FAFB] rounded-xl border border-gray-200 p-4 text-sm text-[#6B7280] space-y-2">
+                  <p className="text-[#1F2937] font-semibold">Date de livraison estimée</p>
+                  <p>
+                    {estimatedDeliveryDate
+                      ? estimatedDeliveryDate.toLocaleDateString('fr-FR')
+                      : 'Sélectionnez une date de clôture pour estimer la livraison.'}
+                  </p>
+                  <p className="text-xs text-[#6B7280]">
+                    Basée sur la date de clôture de la commande et le mode de livraison selectionné.
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
+            <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
             <div>
               <h3 className="text-[#1F2937] text-base font-semibold">Part du partageur</h3>
               <p className="text-sm text-[#6B7280]">
-                Définissez le pourcentage que vous gardez sur la commande, puis choisissez les produits que vous souhaitez commander pour vous.
+                Choisissez les produits que vous souhaitez commander pour vous puis définissez le pourcentage que vous garderez gratuitement sur la commande.
               </p>
             </div>
+
+            <div>
+              <label
+                className={`flex items-center gap-2 text-sm ${
+                  canReceiveCashShare ? 'text-[#1F2937]' : 'text-[#9CA3AF]'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={shareMode === 'cash'}
+                  onChange={(e) => setShareMode(e.target.checked ? 'cash' : 'products')}
+                  disabled={!canReceiveCashShare}
+                />
+                Recevoir la totalité de la part du partageur en argent. (option indisponible pour les profils de particuliers.)
+              </label>
+            </div>
+
+            {shareMode === 'products' && (
+              <div className="space-y-4">
+
+                <label className="block text-sm text-[#6B7280]">Sélection des produits et des quantités</label>
+                {selectedProductsData.length === 0 ? (
+                  <p className="text-sm text-[#6B7280]">Sélectionnez d'abord des produits dans la commande.</p>
+                ) : (
+                  <ShareProductsCarousel
+                    products={selectedProductsData}
+                    quantities={shareQuantities}
+                    onDeltaQuantity={handleShareQuantityChange}
+                    onDirectQuantity={handleShareDirectQuantity}
+                  />
+                )}
+
+                <div className="bg-[#F9FAFB] rounded-lg border border-gray-200 p-3 text-sm text-[#1F2937] space-y-1">
+                  <p>
+                    Valeur estimée : <span className="font-semibold">{shareTotalValue.toFixed(2)} €</span>
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -920,46 +1262,6 @@ export function CreateOrderForm({
                 </p>
               </div>
             </div>
-
-            <div className="border-t border-gray-200 pt-4 space-y-2">
-              <label
-                className={`flex items-center gap-2 text-sm ${
-                  canReceiveCashShare ? 'text-[#1F2937]' : 'text-[#9CA3AF]'
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={shareMode === 'cash'}
-                  onChange={(e) => setShareMode(e.target.checked ? 'cash' : 'products')}
-                  disabled={!canReceiveCashShare}
-                />
-                Recevoir la totalité de la part du partageur en argent
-              </label>
-              <p className="text-xs text-[#6B7280]">
-                Disponible pour les profils d'auto-entrepreneur, d'entreprise ou associatifs.
-              </p>
-            </div>
-
-            {shareMode === 'products' && (
-              <div className="space-y-4">
-                <div className="bg-[#F9FAFB] rounded-lg border border-gray-200 p-3 text-sm text-[#1F2937] space-y-1">
-                  <p>
-                    Valeur estimee : <span className="font-semibold">{shareTotalValue.toFixed(2)} €</span>
-                  </p>
-                </div>
-                <label className="block text-sm text-[#6B7280]">Selection des produits et des quantites</label>
-                {selectedProductsData.length === 0 ? (
-                  <p className="text-sm text-[#6B7280]">Selectionnez d'abord des produits dans la commande.</p>
-                ) : (
-                  <ShareProductsCarousel
-                    products={selectedProductsData}
-                    quantities={shareQuantities}
-                    onDeltaQuantity={handleShareQuantityChange}
-                    onDirectQuantity={handleShareDirectQuantity}
-                  />
-                )}
-              </div>
-            )}
           </div>
 
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
@@ -967,13 +1269,14 @@ export function CreateOrderForm({
               <div>
                 <h3 className="text-[#1F2937] text-base font-semibold">Retrait</h3>
                 <p className="text-sm text-[#6B7280]">
-                  Choisissez l'adresse de retrait et la periode de disponibilite.
+                  Choisissez l'adresse de retrait et la période de disponibilité des produits.
                 </p>
               </div>
               <div className="text-sm text-[#6B7280]">
-                Disponibilite : <span className="text-[#FF6B4A] font-semibold">{renderPickupLine()}</span>
+                Disponibilité : <span className="text-[#FF6B4A] font-semibold">{renderPickupLine()}</span>
               </div>
             </div>
+
 
             <div className="space-y-3">
               <label className="flex items-center gap-2 text-sm text-[#1F2937]">
@@ -1044,7 +1347,7 @@ export function CreateOrderForm({
               <textarea
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Ex. Retrait chez moi, a l'adresse enregistree."
+                placeholder="Ex. Retrait chez moi, à l'adresse enregistree."
                 rows={4}
                 className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
               />
@@ -1055,7 +1358,7 @@ export function CreateOrderForm({
                 {visibility === 'public' ? (
                   <>
                     <div>
-                      <label className="block text-sm text-[#6B7280] mb-2">Duree de recuperation</label>
+                      <label className="block text-sm text-[#6B7280] mb-2">Durée de recupération</label>
                       <select
                         value={pickupWindowWeeks}
                         onChange={(e) => setPickupWindowWeeks(Number(e.target.value))}
@@ -1110,7 +1413,7 @@ export function CreateOrderForm({
                       </div>
                     ) : (
                       <p className="text-xs text-[#B45309]">
-                        Definissez une date de cloture pour generer les dates de retrait.
+                        Définissez une date de clôture pour generer les dates de retrait.
                       </p>
                     )}
                   </>
@@ -1182,7 +1485,7 @@ export function CreateOrderForm({
                   <>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#FF6B4A]" />
-                      <span>Definissez la duree pour calculer la date limite de retrait.</span>
+                      <span>Définissez la duree pour calculer la date limite de retrait.</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#28C1A5]" />
@@ -1311,7 +1614,7 @@ export function CreateOrderForm({
       <div className="mt-6 flex flex-col sm:flex-row gap-3">
         <button
           type="submit"
-          disabled={selectedProducts.length === 0}
+          disabled={selectedProducts.length === 0 || !isDeliveryOptionValid}
           className="w-full sm:flex-1 py-3 bg-[#FF6B4A] text-white rounded-xl hover:bg-[#FF5A39] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors shadow-lg"
         >
           Créer la commande
@@ -1474,7 +1777,7 @@ function ShareProductsCarousel({
         <button
           type="button"
           onClick={goLeft}
-          aria-label="Defiler vers la gauche"
+          aria-label="Défiler vers la gauche"
           className="order-client-view__carousel-button order-client-view__carousel-button--left"
         >
           <ChevronLeft className="w-4 h-4 text-[#FF6B4A] mx-auto" />
@@ -1485,7 +1788,7 @@ function ShareProductsCarousel({
         <button
           type="button"
           onClick={goRight}
-          aria-label="Defiler vers la droite"
+          aria-label="Défiler vers la droite"
           className="order-client-view__carousel-button order-client-view__carousel-button--right"
         >
           <ChevronRight className="w-4 h-4 text-[#FF6B4A] mx-auto" />
@@ -1581,7 +1884,7 @@ function ProducerProductCarousel({
           const hasPrice = Boolean(product.activeLotCode) && product.price > 0;
           const priceLabel = hasPrice
             ? formatEurosFromCents(eurosToCents(product.price))
-            : 'Prix a venir';
+            : 'Prix à venir';
           return (
             <button
               key={product.id}

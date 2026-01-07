@@ -380,6 +380,8 @@ type LegalEntityRow = {
   producer_delivery_days?: string[] | null;
   producer_delivery_min_weight?: number | null;
   producer_delivery_max_weight?: number | null;
+  producer_delivery_radius_km?: number | null;
+  producer_delivery_fee?: number | null;
   producer_pickup_enabled?: boolean | null;
   producer_pickup_days?: string[] | null;
   producer_pickup_start_time?: string | null;
@@ -441,6 +443,8 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   producerDeliveryDays: normalizeDeliveryDays(row.producer_delivery_days),
   producerDeliveryMinWeight: row.producer_delivery_min_weight ?? undefined,
   producerDeliveryMaxWeight: row.producer_delivery_max_weight ?? undefined,
+  producerDeliveryRadiusKm: row.producer_delivery_radius_km ?? undefined,
+  producerDeliveryFee: row.producer_delivery_fee ?? undefined,
   producerPickupEnabled: row.producer_pickup_enabled ?? undefined,
   producerPickupDays: normalizeDeliveryDays(row.producer_pickup_days),
   producerPickupStartTime: row.producer_pickup_start_time ?? undefined,
@@ -1680,6 +1684,19 @@ export default function App() {
     );
   };
 
+  const handleUpdateOrderParticipantSettings = (
+    orderId: string,
+    updates: Partial<Pick<GroupOrder, 'autoApproveParticipationRequests' | 'allowSharerMessages' | 'autoApprovePickupSlots'>>
+  ) => {
+    if (!isAuthenticated) {
+      redirectToAuth(location.pathname);
+      return;
+    }
+    setGroupOrders((prev) =>
+      prev.map((order) => (order.id === orderId ? { ...order, ...updates } : order))
+    );
+  };
+
   const handleStartPurchase = (
     order: GroupOrder,
     payload: { quantities: Record<string, number>; total: number; weight: number }
@@ -1812,9 +1829,13 @@ export default function App() {
       pickupPostcode: orderData.pickupPostcode,
       pickupAddress,
       pickupSlots: orderData.pickupSlots,
+      pickupDeliveryFee: orderData.pickupDeliveryFee ?? 0,
       message: orderData.message,
       status: 'open',
       visibility: orderData.visibility ?? 'public',
+      autoApproveParticipationRequests: orderData.autoApproveParticipationRequests ?? false,
+      allowSharerMessages: orderData.allowSharerMessages ?? true,
+      autoApprovePickupSlots: orderData.autoApprovePickupSlots ?? false,
       totalValue: orderData.totals?.participantTotal ?? 0,
       participants: hasSharerSelection ? 1 : 0,
     };
@@ -2236,6 +2257,8 @@ export default function App() {
               : null,
           producer_delivery_min_weight: userData.legalEntity.producerDeliveryMinWeight ?? null,
           producer_delivery_max_weight: userData.legalEntity.producerDeliveryMaxWeight ?? null,
+          producer_delivery_radius_km: userData.legalEntity.producerDeliveryRadiusKm ?? null,
+          producer_delivery_fee: userData.legalEntity.producerDeliveryFee ?? null,
           producer_pickup_enabled: userData.legalEntity.producerPickupEnabled ?? null,
           producer_pickup_days:
             userData.legalEntity.producerPickupDays && userData.legalEntity.producerPickupDays.length > 0
@@ -2726,6 +2749,15 @@ export default function App() {
         order={order}
         onClose={closeOrderView}
         onVisibilityChange={(visibility) => handleUpdateOrderVisibility(order.id, visibility)}
+        onAutoApproveParticipationRequestsChange={(value) =>
+          handleUpdateOrderParticipantSettings(order.id, { autoApproveParticipationRequests: value })
+        }
+        onAllowSharerMessagesChange={(value) =>
+          handleUpdateOrderParticipantSettings(order.id, { allowSharerMessages: value })
+        }
+        onAutoApprovePickupSlotsChange={(value) =>
+          handleUpdateOrderParticipantSettings(order.id, { autoApprovePickupSlots: value })
+        }
         onPurchase={(payload) => handleStartPurchase(order, payload)}
         initialQuantities={draftQuantities}
         isOwner={Boolean(user && order.sharerId === user.id)}

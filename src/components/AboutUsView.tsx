@@ -26,7 +26,7 @@ export function AboutUsView() {
             </p>
             <p className="about-hero__subtitle"> 
               Son ambition est de contribuer à trouver des solutions face à la crise agricole tout en proposant des
-              produits de qualité accessible à tous, via un modèle de distribution 
+              produits de qualité accessibles à tous, via un modèle de distribution 
               plus direct et collaboratif.
             </p>
             
@@ -100,9 +100,8 @@ export function AboutUsView() {
             <ul className="about-list">
               <li>Exige un engagement dans la durée</li>
               <li>Des jours, lieux et horaires de récupération parfois contraignants</li>
-              <li>On ne choisit pas le contenu de son panier</li>
+              <li>On ne choisit pas toujours le contenu du panier</li>
               <li>Une partie du fonctionnement d'une AMAP repose sur le bénévolat</li>
-              <li>Les amapiens sont peu diversifiés socialement</li>
             </ul>
           </article>
           <article className="about-card">
@@ -119,7 +118,7 @@ export function AboutUsView() {
             <h3 className="about-card__title">Achat en ligne sur des sites proposant des produits</h3>
             <ul className="about-list">
               <li>On achète seulement pour soi</li>
-              <li>Les frais d’expédition engendrent des prix chers ou poussent à commander en gros</li>
+              <li>Les frais d’expédition renchérissent parfois les prix ou forcent à commander en gros</li>
               <li>Résultat : on n’achète pas souvent, ou seulement ponctuellement</li>
               <li>On n'entre pas vraiment en lien avec le producteur</li>
               <li>Le producteur doit pouvoir gérer plein de petites commandes</li>
@@ -137,7 +136,6 @@ export function AboutUsView() {
               <li>De plus grandes plages de récupération des produits et plus proche de chez vous</li>
               <li>On choisit précisement le contenu de sa commande</li>
               <li>Tout le monde y trouve son compte et a un intérêt économique à participer</li>
-              <li>Aucune barrière sociale à l'entrée</li>
             </ul>
           </article>
           <article className="about-card">
@@ -147,7 +145,7 @@ export function AboutUsView() {
               <li>La prise de commande est gérée par le site</li>
               <li>Pas d'échange d'argent entre les participants, tout est géré par le site</li>
               <li>La simplicité permet d'en faire plus souvent</li>
-              <li>Vous pouvez facilement partager l'information de votre commande aux gens autour pour qu'ils y participent</li>
+              <li>Vous pouvez facilement partager l'information de votre commande aux gens autour de vous pour qu'ils y participent</li>
             </ul>
           </article>
           <article className="about-card">
@@ -197,9 +195,8 @@ export function AboutUsView() {
             <li>L’histoire du produit que vous mangez à chaque étape de son parcours de la fourche à la fourchette</li>
             <li>À quoi correspondent vraiment les labels des produits que vous mangez et des exploitations qui vous fournissent</li>
             <li>La répartition de la valeur sur le produit : qui gagne quoi quand vous payez le produit</li>
-            <li>Le plaisir de partager les produits avec </li>
             <li>La possibilité d'entrer en contact directement avec le producteur qui vous fournit</li>
-            <li>Des informations de qualité inédites</li>
+            <li>D'autres informations de qualité inédites</li>
           </ul>
           
         <p className="about-section__note">

@@ -1,4 +1,6 @@
 import React from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   MapPin,
@@ -46,6 +48,85 @@ const deliveryDayOptions: Array<{ id: DeliveryDay; label: string }> = [
   { id: 'saturday', label: 'Samedi' },
   { id: 'sunday', label: 'Dimanche' },
 ];
+
+const defaultLeafletIcon = L.icon({
+  iconUrl: new URL('leaflet/dist/images/marker-icon.png', import.meta.url).toString(),
+  iconRetinaUrl: new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).toString(),
+  shadowUrl: new URL('leaflet/dist/images/marker-shadow.png', import.meta.url).toString(),
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+});
+L.Marker.prototype.options.icon = defaultLeafletIcon;
+
+const defaultDeliveryMapCenter = { lat: 46.2276, lng: 2.2137 };
+
+const reduceDeliveryMapStacking = (map: L.Map) => {
+  const container = map.getContainer();
+  container.style.zIndex = '0';
+  const panes = map.getPanes();
+  Object.values(panes)
+    .filter((pane): pane is HTMLElement => Boolean(pane))
+    .forEach((pane) => {
+      pane.style.zIndex = '5';
+    });
+  const controlSelectors = ['.leaflet-top', '.leaflet-bottom', '.leaflet-control'];
+  controlSelectors.forEach((selector) => {
+    container.querySelectorAll<HTMLElement>(selector).forEach((element) => {
+      element.style.zIndex = '10';
+    });
+  });
+};
+
+type OpeningHourSlot = { start: string; end: string };
+
+const findDeliveryDayOption = (day: string) => {
+  const normalized = day.trim().toLowerCase();
+  if (!normalized) return null;
+  const index = deliveryDayOptions.findIndex(
+    (option) => option.id === normalized || option.label.toLowerCase() === normalized
+  );
+  if (index === -1) return null;
+  return { option: deliveryDayOptions[index], index };
+};
+
+const normalizeOpeningHoursDayKey = (day: string) => findDeliveryDayOption(day)?.option.id;
+
+const getOpeningDayLabel = (day: string) => {
+  const match = findDeliveryDayOption(day);
+  if (match) return match.option.label;
+  if (!day) return '';
+  return `${day.charAt(0).toUpperCase()}${day.slice(1)}`;
+};
+
+const getOpeningDayOrderIndex = (day: string) => findDeliveryDayOption(day)?.index ?? deliveryDayOptions.length;
+
+const parseTimeSegment = (segment?: string) => {
+  if (!segment) return '';
+  const trimmed = segment.trim();
+  if (!trimmed) return '';
+  const match = trimmed.match(/(\d{1,2})(?:(?:[:hH])(\d{1,2}))?/);
+  if (!match) return '';
+  const hours = Number(match[1]);
+  const minutes = match[2] ? Number(match[2]) : 0;
+  if (!Number.isFinite(hours) || hours < 0 || hours > 23) return '';
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes > 59) return '';
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+};
+
+const parseOpeningHoursEntry = (value?: string): OpeningHourSlot => {
+  if (!value) return { start: '', end: '' };
+  const [startSegment, endSegment] = value.split('-');
+  return {
+    start: parseTimeSegment(startSegment),
+    end: parseTimeSegment(endSegment),
+  };
+};
+
+const createEmptyOpeningHoursSlots = (): Record<DeliveryDay, OpeningHourSlot> =>
+  deliveryDayOptions.reduce((acc, option) => {
+    acc[option.id] = { start: '', end: '' };
+    return acc;
+  }, {} as Record<DeliveryDay, OpeningHourSlot>);
 
 const producerCategoryOptions: Array<{ id: string; label: string }> = [
   { id: 'eleveur', label: 'Eleveur' },
@@ -257,6 +338,13 @@ export function ProfileView({
     },
     [onOpenProduct]
   );
+
+  const openingHoursEntries = React.useMemo(() => {
+    if (!user.openingHours) return [];
+    return Object.entries(user.openingHours).sort(
+      (a, b) => getOpeningDayOrderIndex(a[0]) - getOpeningDayOrderIndex(b[0])
+    );
+  }, [user.openingHours]);
 
   if (mode === 'edit') {
     return (
@@ -525,12 +613,12 @@ export function ProfileView({
                   ))}
               </div>
             )}
-            {user.openingHours && Object.keys(user.openingHours).length > 0 && (
+            {openingHoursEntries.length > 0 && (
               <div className="flex flex-col gap-1 text-sm text-[#6B7280]">
                 <span className="text-xs uppercase text-[#9CA3AF]">Horaires</span>
-                {Object.entries(user.openingHours).map(([day, hours]) => (
-                  <div key={day} className="flex gap-2">
-                    <span className="w-24 font-semibold text-[#374151] capitalize">{day}</span>
+                {openingHoursEntries.map(([day, hours]) => (
+                  <div key={`${day}-${hours}`} className="flex gap-2">
+                    <span className="w-24 font-semibold text-[#374151]">{getOpeningDayLabel(day)}</span>
                     <span>{hours}</span>
                   </div>
                 ))}
@@ -625,12 +713,18 @@ function ProfileEditPanel({
   const [socialInstagram, setSocialInstagram] = React.useState(user.socialLinks?.instagram ?? '');
   const [socialFacebook, setSocialFacebook] = React.useState(user.socialLinks?.facebook ?? '');
   const [socialTiktok, setSocialTiktok] = React.useState(user.socialLinks?.tiktok ?? '');
-  const [openingHoursText, setOpeningHoursText] = React.useState(
-    user.openingHours
-      ? Object.entries(user.openingHours)
-          .map(([day, value]) => `${day}:${value}`)
-          .join('\n')
-      : ''
+  const [openingHoursSlots, setOpeningHoursSlots] = React.useState<Record<DeliveryDay, OpeningHourSlot>>(
+    () => {
+      const defaults = createEmptyOpeningHoursSlots();
+      if (user.openingHours) {
+        Object.entries(user.openingHours).forEach(([day, value]) => {
+          const normalizedDay = normalizeOpeningHoursDayKey(day);
+          if (!normalizedDay) return;
+          defaults[normalizedDay] = parseOpeningHoursEntry(value);
+        });
+      }
+      return defaults;
+    }
   );
   const [producerLabels, setProducerLabels] = React.useState<ProducerLabelDetail[]>([]);
   const [producerLabelInput, setProducerLabelInput] = React.useState('');
@@ -679,6 +773,12 @@ function ProfileEditPanel({
   const [producerDeliveryMaxWeight, setProducerDeliveryMaxWeight] = React.useState<number>(
     user.legalEntity?.producerDeliveryMaxWeight ?? 0
   );
+  const [producerDeliveryRadiusKm, setProducerDeliveryRadiusKm] = React.useState<number>(
+    user.legalEntity?.producerDeliveryRadiusKm ?? 0
+  );
+  const [producerDeliveryFee, setProducerDeliveryFee] = React.useState<number>(
+    user.legalEntity?.producerDeliveryFee ?? 0
+  );
   const [producerPickupEnabled, setProducerPickupEnabled] = React.useState<boolean>(
     Boolean(user.legalEntity?.producerPickupEnabled)
   );
@@ -697,6 +797,28 @@ function ProfileEditPanel({
   const [producerPickupMaxWeight, setProducerPickupMaxWeight] = React.useState<number>(
     user.legalEntity?.producerPickupMaxWeight ?? 0
   );
+  const deliveryAddressQuery = React.useMemo(() => {
+    const trimmedPostcode = postcode.trim();
+    const trimmedCity = city.trim();
+    if (!trimmedPostcode || !trimmedCity) return '';
+    const trimmedAddress = address.trim();
+    return [trimmedAddress, trimmedPostcode, trimmedCity].filter(Boolean).join(' ');
+  }, [address, postcode, city]);
+  const normalizedDeliveryRadiusKm =
+    Number.isFinite(producerDeliveryRadiusKm) && producerDeliveryRadiusKm >= 0 ? producerDeliveryRadiusKm : 0;
+  const deliveryMapContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const deliveryMapRef = React.useRef<L.Map | null>(null);
+  const deliveryMapLayerRef = React.useRef<L.LayerGroup | null>(null);
+  const initialDeliveryCenter = React.useMemo(() => {
+    if (Number.isFinite(user.addressLat ?? NaN) && Number.isFinite(user.addressLng ?? NaN)) {
+      return { lat: user.addressLat!, lng: user.addressLng! };
+    }
+    return null;
+  }, [user.addressLat, user.addressLng]);
+  const [deliveryMapCenter, setDeliveryMapCenter] = React.useState<{ lat: number; lng: number } | null>(
+    initialDeliveryCenter
+  );
+  const [deliveryMapStatus, setDeliveryMapStatus] = React.useState<'idle' | 'loading' | 'resolved' | 'error'>('idle');
   const avatarFallbackSrc = user.profileImage?.trim() || DEFAULT_PROFILE_AVATAR;
   const avatarVersion = user.avatarUpdatedAt ?? user.updatedAt ?? undefined;
   const toggleDeliveryDay = (
@@ -704,6 +826,17 @@ function ProfileEditPanel({
     setter: React.Dispatch<React.SetStateAction<DeliveryDay[]>>
   ) => {
     setter((prev) => (prev.includes(day) ? prev.filter((value) => value !== day) : [...prev, day]));
+  };
+
+  const handleOpeningHoursChange = (
+    day: DeliveryDay,
+    field: 'start' | 'end',
+    value: string
+  ) => {
+    setOpeningHoursSlots((prev) => ({
+      ...prev,
+      [day]: { ...prev[day], [field]: value },
+    }));
   };
 
   const normalizeLabelValue = (value: string) => value.trim().toLowerCase();
@@ -859,6 +992,123 @@ function ProfileEditPanel({
     return true;
   };
 
+  React.useEffect(() => {
+    if (producerDeliveryEnabled) return;
+    if (deliveryMapRef.current) {
+      deliveryMapRef.current.remove();
+      deliveryMapRef.current = null;
+      deliveryMapLayerRef.current = null;
+    }
+  }, [producerDeliveryEnabled]);
+
+  React.useEffect(() => {
+    if (!producerDeliveryEnabled || !deliveryMapContainerRef.current || deliveryMapRef.current) return;
+    const map = L.map(deliveryMapContainerRef.current, {
+      zoomControl: true,
+      attributionControl: false,
+    }).setView([defaultDeliveryMapCenter.lat, defaultDeliveryMapCenter.lng], 6);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap',
+      maxZoom: 19,
+    }).addTo(map);
+
+    reduceDeliveryMapStacking(map);
+    deliveryMapRef.current = map;
+    setTimeout(() => deliveryMapRef.current?.invalidateSize(), 100);
+  }, [producerDeliveryEnabled]);
+
+  React.useEffect(() => {
+    if (initialDeliveryCenter && !deliveryMapCenter) {
+      setDeliveryMapCenter(initialDeliveryCenter);
+    }
+  }, [initialDeliveryCenter, deliveryMapCenter]);
+
+  React.useEffect(() => {
+    if (!producerDeliveryEnabled) return;
+    if (!deliveryAddressQuery) {
+      setDeliveryMapCenter(null);
+      setDeliveryMapStatus('idle');
+      return;
+    }
+    let isActive = true;
+    const controller = new AbortController();
+    setDeliveryMapStatus('loading');
+    fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(deliveryAddressQuery)}&limit=1`, {
+      signal: controller.signal,
+      headers: {
+        'Accept-Language': 'fr',
+      },
+    })
+      .then((res) => res.json())
+      .then((results) => {
+        if (!isActive) return;
+        const candidate = Array.isArray(results) ? results[0] : null;
+        const lat = Number(candidate?.lat);
+        const lng = Number(candidate?.lon);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          setDeliveryMapCenter({ lat, lng });
+          setDeliveryMapStatus('resolved');
+        } else {
+          setDeliveryMapCenter(null);
+          setDeliveryMapStatus('error');
+        }
+      })
+      .catch(() => {
+        if (!isActive) return;
+        setDeliveryMapCenter(null);
+        setDeliveryMapStatus('error');
+      });
+
+    return () => {
+      isActive = false;
+      controller.abort();
+    };
+  }, [producerDeliveryEnabled, deliveryAddressQuery]);
+
+  React.useEffect(() => {
+    if (!producerDeliveryEnabled || !deliveryMapRef.current) return;
+    if (!deliveryMapLayerRef.current) {
+      deliveryMapLayerRef.current = L.layerGroup().addTo(deliveryMapRef.current);
+    }
+    deliveryMapLayerRef.current.clearLayers();
+
+    if (!deliveryMapCenter) {
+    deliveryMapRef.current.setView([defaultDeliveryMapCenter.lat, defaultDeliveryMapCenter.lng], 6);
+      deliveryMapRef.current.invalidateSize();
+      return;
+    }
+
+    const latLng: L.LatLngTuple = [deliveryMapCenter.lat, deliveryMapCenter.lng];
+    const marker = L.marker(latLng);
+    deliveryMapLayerRef.current.addLayer(marker);
+
+    if (normalizedDeliveryRadiusKm > 0) {
+      const circle = L.circle(latLng, {
+        radius: normalizedDeliveryRadiusKm * 1000,
+        color: '#FF6B4A',
+        weight: 2,
+        fillColor: '#FF6B4A',
+        fillOpacity: 0.15,
+      });
+      deliveryMapLayerRef.current.addLayer(circle);
+      deliveryMapRef.current.fitBounds(circle.getBounds(), { padding: [24, 24] });
+    } else {
+      deliveryMapRef.current.setView(latLng, 12);
+    }
+
+    setTimeout(() => deliveryMapRef.current?.invalidateSize(), 100);
+  }, [producerDeliveryEnabled, deliveryMapCenter, normalizedDeliveryRadiusKm]);
+
+  React.useEffect(
+    () => () => {
+      deliveryMapRef.current?.remove();
+      deliveryMapRef.current = null;
+      deliveryMapLayerRef.current = null;
+    },
+    []
+  );
+
   const canBeProducer =
     accountType === 'company' || accountType === 'association' || accountType === 'public_institution';
 
@@ -890,18 +1140,25 @@ function ProfileEditPanel({
     );
 
     const opening: Record<string, string> = {};
-    openingHoursText
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .forEach((line) => {
-        const [day, hours] = line.split(':');
-        if (day && hours) {
-          opening[day.toLowerCase()] = hours.trim();
-        }
-      });
+    Object.entries(openingHoursSlots).forEach(([day, slot]) => {
+      const { start, end } = slot;
+      if (start && end) {
+        opening[day] = `${start} - ${end}`;
+        return;
+      }
+      if (start) {
+        opening[day] = start;
+        return;
+      }
+      if (end) {
+        opening[day] = end;
+      }
+    });
 
     const normalizeWeight = (value: number) => (Number.isFinite(value) && value > 0 ? value : undefined);
+    const normalizeDistance = (value: number) =>
+      Number.isFinite(value) && value >= 0 ? value : undefined;
+    const normalizeFee = (value: number) => (Number.isFinite(value) && value >= 0 ? value : undefined);
     const deliveryLeadPayload =
       deliveryLeadType === 'fixed_day'
         ? { deliveryLeadType: 'fixed_day' as DeliveryLeadType, deliveryFixedDay }
@@ -932,6 +1189,8 @@ function ProfileEditPanel({
             producerDeliveryDays: producerDeliveryEnabled ? producerDeliveryDays : undefined,
             producerDeliveryMinWeight: producerDeliveryEnabled ? normalizeWeight(producerDeliveryMinWeight) : undefined,
             producerDeliveryMaxWeight: producerDeliveryEnabled ? normalizeWeight(producerDeliveryMaxWeight) : undefined,
+            producerDeliveryRadiusKm: normalizeDistance(producerDeliveryRadiusKm),
+            producerDeliveryFee: normalizeFee(producerDeliveryFee),
             producerPickupEnabled,
             producerPickupDays: producerPickupEnabled ? producerPickupDays : undefined,
             producerPickupStartTime: producerPickupEnabled ? producerPickupStartTime.trim() : undefined,
@@ -988,7 +1247,7 @@ function ProfileEditPanel({
       <div className="profile-edit-header flex items-center justify-between">
         <div>
           <h2 className="text-[#1F2937] text-xl font-semibold">Modifier le profil</h2>
-          <p className="text-sm text-[#6B7280]">Retrouvez les reglages de l ancien profil.</p>
+          <p className="text-sm text-[#6B7280]">Retrouvez les réglages de l ancien profil.</p>
         </div>
         <button
           onClick={onClose}
@@ -1124,7 +1383,7 @@ function ProfileEditPanel({
             <p className="text-xs text-[#6B7280]">Pour sécuriser le fonctionnement de la plateforme.</p>
           </div>
           <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-            <p className="text-sm font-semibold text-[#1F2937]">Confirmez vos coordonnees</p>
+            <p className="text-sm font-semibold text-[#1F2937]">Confirmez vos coordonnées</p>
             <div className="space-y-3">
               <label className="block text-sm text-[#6B7280]">Adresse *</label>
               <div className="flex items-center gap-2">
@@ -1173,7 +1432,7 @@ function ProfileEditPanel({
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-[#6B7280]">Pays</label>
+                  <label className="block text-sm text-[#6B7280]">Pays *</label>
                   <select
                     className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] bg-white"
                     defaultValue="France"
@@ -1198,9 +1457,9 @@ function ProfileEditPanel({
                 />
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Téléphone (obligatoire)</label>
+                <label className="block text-sm text-[#6B7280]">Téléphone *</label>
                 <input
                   type="tel"
                   value={phone}
@@ -1290,7 +1549,7 @@ function ProfileEditPanel({
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
-                <label className="block text-sm text-[#6B7280]">Raison sociale</label>
+                <label className="block text-sm text-[#6B7280]">Raison sociale *</label>
                 <input
                   type="text"
                   value={legalName}
@@ -1300,7 +1559,7 @@ function ProfileEditPanel({
                 />
               </div>
               <div>
-                <label className="block text-sm text-[#6B7280]">SIRET</label>
+                <label className="block text-sm text-[#6B7280]">SIRET *</label>
                 <input
                   type="text"
                   value={siret}
@@ -1381,14 +1640,30 @@ function ProfileEditPanel({
                 </div>
               </div>
               <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Horaires (ex: lundi:08h-12h)</label>
-                <textarea
-                  value={openingHoursText}
-                  onChange={(e) => setOpeningHoursText(e.target.value)}
-                  rows={4}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
-                />
-                <p className="text-xs text-[#9CA3AF]">Une ligne par jour, format jour:plage horaire.</p>
+                <label className="block text-sm text-[#6B7280]">Horaires</label>
+                <div className="space-y-2">
+                  {deliveryDayOptions.map((dayOption) => (
+                    <div key={`opening-${dayOption.id}`} className="flex items-center gap-3">
+                      <span className="inline-flex items-center px-3 py-1 rounded-full border border-gray-200 bg-white text-xs font-semibold text-[#374151]">
+                        {dayOption.label}
+                      </span>
+                      <input
+                        type="time"
+                        value={openingHoursSlots[dayOption.id].start}
+                        onChange={(e) => handleOpeningHoursChange(dayOption.id, 'start', e.target.value)}
+                        className="w-28 px-3 py-2 text-sm text-center border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A]"
+                      />
+                      <span className="text-sm text-[#9CA3AF]">-</span>
+                      <input
+                        type="time"
+                        value={openingHoursSlots[dayOption.id].end}
+                        onChange={(e) => handleOpeningHoursChange(dayOption.id, 'end', e.target.value)}
+                        className="w-28 px-3 py-2 text-sm text-center border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A]"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-[#9CA3AF]">Laissez vide pour indiquer une fermeture.</p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-sm text-[#374151]">
@@ -1536,9 +1811,9 @@ function ProfileEditPanel({
         {role === 'producer' && (
           <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="text-[#1F2937] font-semibold">Reglages producteur - Livraison</h3>
+              <h3 className="text-[#1F2937] font-semibold">Réglages producteur - Livraison des produits</h3>
               <span className="text-xs text-[#6B7280]">
-                Définissez les options proposées aux partageurs pour la livraison et les seuils de poids minimum et maximum.
+                Définissez les options proposées aux partageurs pour la livraison et les seuils de poids minimum et maximum d'acceptation.
               </span>
             </div>
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -1551,7 +1826,7 @@ function ProfileEditPanel({
                   />
                   Expédition Chronofresh
                 </label>
-                <p className="text-xs text-[#6B7280]">Option gérée par le site : les frais de livraison sont répartis entre ls participants à la commande.</p>
+                <p className="text-xs text-[#6B7280]">Option gérée par le site : les frais de livraison sont répartis entre les participants à la commande.</p>
                 <div className="space-y-2">
                   <label className="block text-xs text-[#6B7280]">indiquez dans quel délai vous vous engagez à avoir livré la commande apres clôture de celle-ci (Chronofresh prend en moyenne 24h pour livrer à partir du moment où il a récupéré la commande)</label>
                   <select
@@ -1598,7 +1873,7 @@ function ProfileEditPanel({
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-xs text-[#6B7280]">Poids min (kg)</label>
+                    <label className="block text-xs text-[#6B7280]">Poids min accepté (en kg)</label>
                     <input
                       type="number"
                       value={chronofreshMinWeight}
@@ -1609,7 +1884,7 @@ function ProfileEditPanel({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-[#6B7280]">Poids max (kg)</label>
+                    <label className="block text-xs text-[#6B7280]">Poids max accepté (en kg)</label>
                     <input
                       type="number"
                       value={chronofreshMaxWeight}
@@ -1629,9 +1904,9 @@ function ProfileEditPanel({
                     checked={producerDeliveryEnabled}
                     onChange={(e) => setProducerDeliveryEnabled(e.target.checked)}
                   />
-                  Livraison par le producteur
+                  Vous pouvez assurer la livraison selon certaines conditions (à préciser ci-dessous)
                 </label>
-                <p className="text-xs text-[#6B7280]">Selectionnez les jours disponibles.</p>
+                <p className="text-xs text-[#6B7280]">Sélectionnez vos jours de livraison dans la semaine.</p>
                 <div className="flex flex-wrap gap-2">
                   {deliveryDayOptions.map((option) => {
                     const isActive = producerDeliveryDays.includes(option.id);
@@ -1654,7 +1929,7 @@ function ProfileEditPanel({
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-xs text-[#6B7280]">Poids min (kg)</label>
+                    <label className="block text-xs text-[#6B7280]">Poids min accepté (en kg)</label>
                     <input
                       type="number"
                       value={producerDeliveryMinWeight}
@@ -1665,7 +1940,7 @@ function ProfileEditPanel({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-[#6B7280]">Poids max (kg)</label>
+                    <label className="block text-xs text-[#6B7280]">Poids max accepté (en kg)</label>
                     <input
                       type="number"
                       value={producerDeliveryMaxWeight}
@@ -1676,6 +1951,75 @@ function ProfileEditPanel({
                     />
                   </div>
                 </div>
+                <div className="space-y-1">
+                  <label className="block text-xs text-[#6B7280]">Indiquez votre zone de livraison (km)</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      value={producerDeliveryRadiusKm}
+                      onChange={(e) => setProducerDeliveryRadiusKm(Number(e.target.value))}
+                      min="0"
+                      step="1"
+                      disabled={!producerDeliveryEnabled}
+                      className="flex-1 px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      value={producerDeliveryRadiusKm}
+                      onChange={(e) => setProducerDeliveryRadiusKm(Number(e.target.value))}
+                      min="0"
+                      max="100"
+                      step="1"
+                      disabled={!producerDeliveryEnabled}
+                      className="flex-1 accent-[#FF6B4A]"
+                    />
+                    <span className="text-xs text-[#6B7280]">
+                      {producerDeliveryRadiusKm.toFixed(0)} km
+                    </span>
+                  </div>
+                </div>
+                
+
+            {producerDeliveryEnabled && (
+              <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h4 className="text-[#1F2937] font-semibold">Zone de livraison</h4>
+                </div>
+                <div
+                  ref={deliveryMapContainerRef}
+                  className="w-full rounded-lg overflow-hidden border border-gray-200"
+                  style={{ height: 260, minHeight: 260 }}
+                />
+                {!deliveryAddressQuery && (
+                  <p className="text-xs text-[#9CA3AF]">
+                    Renseignez l'adresse, le code postal et la ville dans "Coordonnées" pour positionner la carte.
+                  </p>
+                )}
+                {deliveryAddressQuery && deliveryMapStatus === 'loading' && (
+                  <p className="text-xs text-[#9CA3AF]">Recherche de l'adresse...</p>
+                )}
+                {deliveryAddressQuery && deliveryMapStatus === 'error' && (
+                  <p className="text-xs text-[#B45309]">
+                    Adresse introuvable. Vérifiez les coordonnées.
+                  </p>
+                )}
+              </div>
+            )}
+                <div className="space-y-1">
+                  <label className="block text-xs text-[#6B7280]">Frais de livraison par livraison (€)</label>
+                  <input
+                    type="number"
+                    value={producerDeliveryFee}
+                    onChange={(e) => setProducerDeliveryFee(Number(e.target.value))}
+                    min="0"
+                    step="0.01"
+                    disabled={!producerDeliveryEnabled}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+                <p className="text-[9px]">Indiquez 0€ si vous ne prenez pas de frais pour la livraison.</p>
               </div>
 
               <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4">
@@ -1685,9 +2029,9 @@ function ProfileEditPanel({
                     checked={producerPickupEnabled}
                     onChange={(e) => setProducerPickupEnabled(e.target.checked)}
                   />
-                  Retrait par le partageur
+                  Retrait possible de la commande directement sur votre exploitation par le créateur de la commande (partageur)
                 </label>
-                <p className="text-xs text-[#6B7280]">Jours possibles pour venir chercher.</p>
+                <p className="text-xs text-[#6B7280]">Jours possibles pour venir chercher le produit à votre exploitation.</p>
                 <div className="flex flex-wrap gap-2">
                   {deliveryDayOptions.map((option) => {
                     const isActive = producerPickupDays.includes(option.id);
@@ -1732,7 +2076,7 @@ function ProfileEditPanel({
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-xs text-[#6B7280]">Poids min (kg)</label>
+                    <label className="block text-xs text-[#6B7280]">Poids min accepté (en kg)</label>
                     <input
                       type="number"
                       value={producerPickupMinWeight}
@@ -1743,7 +2087,7 @@ function ProfileEditPanel({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-[#6B7280]">Poids max (kg)</label>
+                    <label className="block text-xs text-[#6B7280]">Poids max accepté (en kg)</label>
                     <input
                       type="number"
                       value={producerPickupMaxWeight}

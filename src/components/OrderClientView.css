@@ -209,6 +209,24 @@
   position: relative;
 }
 
+.order-client-view__participant-settings {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.order-client-view__participant-setting-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .order-client-view__participants-visibility-button {
   display: inline-flex;
   align-items: center;
