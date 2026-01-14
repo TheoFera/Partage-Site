@@ -263,7 +263,7 @@ export function ProfileView({
         '';
       return {
         id: order.id,
-        orderId: order.id,
+        orderId: order.orderCode ?? order.id,
         title: order.title,
         location,
         tags: [],
@@ -1019,52 +1019,20 @@ function ProfileEditPanel({
   }, [producerDeliveryEnabled]);
 
   React.useEffect(() => {
-    if (initialDeliveryCenter && !deliveryMapCenter) {
-      setDeliveryMapCenter(initialDeliveryCenter);
-    }
-  }, [initialDeliveryCenter, deliveryMapCenter]);
-
-  React.useEffect(() => {
     if (!producerDeliveryEnabled) return;
     if (!deliveryAddressQuery) {
       setDeliveryMapCenter(null);
       setDeliveryMapStatus('idle');
       return;
     }
-    let isActive = true;
-    const controller = new AbortController();
-    setDeliveryMapStatus('loading');
-    fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(deliveryAddressQuery)}&limit=1`, {
-      signal: controller.signal,
-      headers: {
-        'Accept-Language': 'fr',
-      },
-    })
-      .then((res) => res.json())
-      .then((results) => {
-        if (!isActive) return;
-        const candidate = Array.isArray(results) ? results[0] : null;
-        const lat = Number(candidate?.lat);
-        const lng = Number(candidate?.lon);
-        if (Number.isFinite(lat) && Number.isFinite(lng)) {
-          setDeliveryMapCenter({ lat, lng });
-          setDeliveryMapStatus('resolved');
-        } else {
-          setDeliveryMapCenter(null);
-          setDeliveryMapStatus('error');
-        }
-      })
-      .catch(() => {
-        if (!isActive) return;
-        setDeliveryMapCenter(null);
-        setDeliveryMapStatus('error');
-      });
-
-    return () => {
-      isActive = false;
-      controller.abort();
-    };
-  }, [producerDeliveryEnabled, deliveryAddressQuery]);
+    if (initialDeliveryCenter) {
+      setDeliveryMapCenter(initialDeliveryCenter);
+      setDeliveryMapStatus('resolved');
+      return;
+    }
+    setDeliveryMapCenter(null);
+    setDeliveryMapStatus('error');
+  }, [deliveryAddressQuery, initialDeliveryCenter, producerDeliveryEnabled]);
 
   React.useEffect(() => {
     if (!producerDeliveryEnabled || !deliveryMapRef.current) return;

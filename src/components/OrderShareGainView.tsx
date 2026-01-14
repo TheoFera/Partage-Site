@@ -39,6 +39,7 @@ export function OrderShareGainView({
   // Gain potentiel = part achetee * baisse du cout logistique par kg entre maintenant et la capacite max.
   const potentialGain = Math.max(0, participantWeight * (costPerKgNow - costPerKgAtMax));
   const progress = Math.min(100, (currentWeight / maxWeight) * 100);
+  const requiresManualApproval = order.autoApproveParticipationRequests === false;
 
   return (
     <div className="order-share-gain-view">
@@ -49,8 +50,13 @@ export function OrderShareGainView({
               Paiement confirmé, merci !
             </h2>
             <p className="order-share-gain-view__subtitle">
-              Plus la commande se remplit, plus les couts logistiques se divisent entre tous.
+              Plus la commande se remplit, plus les coûts logistiques sont divisés entre tous les participants.
             </p>
+            {requiresManualApproval && (
+              <p className="order-share-gain-view__manual-note">
+                La demande de participation a été enregistrée auprès du créateur de la commande. Vous serez remboursé si elle est refusée.
+              </p>
+            )}
           </div>
           <span className="order-share-gain-view__status-badge">
             <CheckCircle2 className="order-share-gain-view__icon order-share-gain-view__icon--large" />
@@ -82,7 +88,7 @@ export function OrderShareGainView({
               Votre part
             </div>
             <p className="order-share-gain-view__metric-value">{participantWeight.toFixed(2)} kg</p>
-            <p className="order-share-gain-view__metric-note">Votre achat participe a la mutualisation.</p>
+            <p className="order-share-gain-view__metric-note">Votre achat participe à la mutualisation.</p>
           </div>
           <div className="order-share-gain-view__metric-card order-share-gain-view__metric-card--accent">
             <div className="order-share-gain-view__metric-label order-share-gain-view__metric-label--accent">
@@ -106,7 +112,7 @@ export function OrderShareGainView({
 
         <div className="order-share-gain-view__info">
           Votre gain de cooperation correspond a la baisse de cout logistique par kg entre le niveau actuel et le
-          poids maximal, applique a votre part. Partagez la commande pour activer ce gain.
+          poids maximal, applique a votre part. Partagez la commande pour augmenter ce gain.
         </div>
 
         <div className="order-share-gain-view__actions">

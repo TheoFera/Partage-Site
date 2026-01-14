@@ -22,6 +22,7 @@ import { AuthPage } from './components/AuthPage';
 import { ShareOverlay } from './components/ShareOverlay';
 import { mockProducts, mockUser, mockGroupOrders } from './data/mockData';
 import { ProductDetailView } from './components/ProductDetailView';
+import { OrderProductContextView } from './components/OrderProductContextView';
 import {
   CreateProductPayload,
   Product,
@@ -38,6 +39,14 @@ import {
 import { getSupabaseClient } from './lib/supabaseClient';
 import { eurosToCents, formatEurosFromCents } from './lib/money';
 import { DEMO_MODE, getLotByCode, getProductByCode, listProducts } from './data/productsProvider';
+import {
+  addItem,
+  createPaymentStub,
+  getParticipantByProfile,
+  listOrdersForUser,
+  listPublicOrders,
+  requestParticipation,
+} from './services/orders';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
   PRODUCER_LABELS_TABLE,
@@ -193,6 +202,46 @@ const AuthWall = ({
   </div>
 );
 
+type StartPaymentPayload = {
+  quantities: Record<string, number>;
+  total: number;
+  weight: number;
+};
+
+type OrderRouteProps = {
+  groupOrders: GroupOrder[];
+  currentUser: User | null;
+  onClose: () => void;
+  onOpenParticipantProfile: (participantName: string) => void;
+  onStartPurchase: (order: GroupOrder, payload: StartPaymentPayload) => void;
+};
+
+const OrderRoute = ({
+  groupOrders,
+  currentUser,
+  onClose,
+  onOpenParticipantProfile,
+  onStartPurchase,
+}: OrderRouteProps) => {
+  const params = useParams<{ orderCode: string }>();
+  if (!params.orderCode) return <NotFound message="Commande introuvable." />;
+  const order = groupOrders.find((o) => o.orderCode === params.orderCode || o.id === params.orderCode);
+  return (
+    <OrderClientView
+      onClose={onClose}
+      currentUser={currentUser}
+      onOpenParticipantProfile={onOpenParticipantProfile}
+      onStartPayment={(payload) => {
+        if (!order) {
+          toast.error('Commande introuvable pour le paiement.');
+          return;
+        }
+        onStartPurchase(order, payload);
+      }}
+    />
+  );
+};
+
 type AuthRedirectExtras = {
   signupPrefill?: {
     address?: string;
@@ -264,6 +313,28 @@ const parseDistanceKm = (value?: string) => {
   if (!match) return null;
   const parsed = Number(match[1].replace(',', '.'));
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+const geocodeAddress = async (query: string): Promise<{ lat: number; lng: number } | null> => {
+  if (!query) return null;
+  try {
+    const response = await fetch(
+      `https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(query)}&limit=1`
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as {
+      features?: Array<{ geometry?: { coordinates?: [number, number] } }>;
+    };
+    const coords = data?.features?.[0]?.geometry?.coordinates;
+    const lng = Number(coords?.[0]);
+    const lat = Number(coords?.[1]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { lat, lng };
+    }
+  } catch {
+    return null;
+  }
+  return null;
 };
 
 const normalizeText = (value: string) =>
@@ -434,23 +505,23 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   iban: row.iban ?? undefined,
   accountHolderName: row.account_holder_name ?? undefined,
   deliveryLeadType: (row.delivery_lead_type as LegalEntity['deliveryLeadType']) ?? undefined,
-  deliveryLeadDays: row.delivery_lead_days ?? undefined,
+  deliveryLeadDays: toNumberOrUndefined(row.delivery_lead_days),
   deliveryFixedDay: normalizeDeliveryDayValue(row.delivery_fixed_day),
   chronofreshEnabled: row.chronofresh_enabled ?? undefined,
-  chronofreshMinWeight: row.chronofresh_min_weight ?? undefined,
-  chronofreshMaxWeight: row.chronofresh_max_weight ?? undefined,
+  chronofreshMinWeight: toNumberOrUndefined(row.chronofresh_min_weight),
+  chronofreshMaxWeight: toNumberOrUndefined(row.chronofresh_max_weight),
   producerDeliveryEnabled: row.producer_delivery_enabled ?? undefined,
   producerDeliveryDays: normalizeDeliveryDays(row.producer_delivery_days),
-  producerDeliveryMinWeight: row.producer_delivery_min_weight ?? undefined,
-  producerDeliveryMaxWeight: row.producer_delivery_max_weight ?? undefined,
-  producerDeliveryRadiusKm: row.producer_delivery_radius_km ?? undefined,
-  producerDeliveryFee: row.producer_delivery_fee ?? undefined,
+  producerDeliveryMinWeight: toNumberOrUndefined(row.producer_delivery_min_weight),
+  producerDeliveryMaxWeight: toNumberOrUndefined(row.producer_delivery_max_weight),
+  producerDeliveryRadiusKm: toNumberOrUndefined(row.producer_delivery_radius_km),
+  producerDeliveryFee: toNumberOrUndefined(row.producer_delivery_fee),
   producerPickupEnabled: row.producer_pickup_enabled ?? undefined,
   producerPickupDays: normalizeDeliveryDays(row.producer_pickup_days),
   producerPickupStartTime: row.producer_pickup_start_time ?? undefined,
   producerPickupEndTime: row.producer_pickup_end_time ?? undefined,
-  producerPickupMinWeight: row.producer_pickup_min_weight ?? undefined,
-  producerPickupMaxWeight: row.producer_pickup_max_weight ?? undefined,
+  producerPickupMinWeight: toNumberOrUndefined(row.producer_pickup_min_weight),
+  producerPickupMaxWeight: toNumberOrUndefined(row.producer_pickup_max_weight),
 });
 
 const mapProfileRowToUser = (
@@ -972,6 +1043,30 @@ export default function App() {
   const [createdProductDetails, setCreatedProductDetails] = React.useState<Record<string, ProductDetail>>({});
   const [useDemoProducts, setUseDemoProducts] = React.useState<boolean>(DEMO_MODE);
   const [groupOrders, setGroupOrders] = React.useState<GroupOrder[]>(DEMO_MODE ? mockGroupOrders : []);
+  React.useEffect(() => {
+    if (DEMO_MODE || !supabaseClient) return;
+    let active = true;
+    const loadOrders = async () => {
+      try {
+        const [publicOrders, userOrders] = await Promise.all([
+          listPublicOrders(),
+          user?.id ? listOrdersForUser(user.id) : Promise.resolve([]),
+        ]);
+        if (!active) return;
+        const merged = new Map<string, GroupOrder>();
+        [...publicOrders, ...userOrders].forEach((order) => {
+          merged.set(order.id, order);
+        });
+        setGroupOrders(Array.from(merged.values()));
+      } catch (error) {
+        console.warn('Orders load error:', error);
+      }
+    };
+    loadOrders();
+    return () => {
+      active = false;
+    };
+  }, [supabaseClient, user?.id]);
   const [deck, setDeck] = React.useState<DeckCard[]>([]);
   const [orderBuilderProducts, setOrderBuilderProducts] = React.useState<DeckCard[] | null>(null);
   const [orderBuilderSelection, setOrderBuilderSelection] = React.useState<string[] | null>(null);
@@ -1120,7 +1215,7 @@ export default function App() {
       const suffix = order.products.length > 3 ? ' ...' : '';
       const lineup = productNames ? `${productNames}${suffix}` : `${order.products.length} produits`;
       return {
-        link: getAbsoluteLink(`/commande/${order.id}`),
+        link: getAbsoluteLink(`/cmd/${order.orderCode ?? order.id}`),
         title: `Commande groupee : ${order.title}`,
         subtitle: `Par ${order.sharerName} - ${order.products.length} produit${order.products.length > 1 ? 's' : ''}`,
         description: `Partagez cette commande groupee et invitez vos voisins a y participer. Scannez pour voir les produits (${lineup}) et les modalites de retrait.`,
@@ -1201,8 +1296,8 @@ export default function App() {
   const lastTabRef = React.useRef<string | null>(null);
   const orderBuilderSourceRef = React.useRef<string | null>(null);
 
-  const orderIdFromPath = React.useMemo(() => {
-    const match = location.pathname.match(/^\/commande\/([^/]+)/);
+  const orderCodeFromPath = React.useMemo(() => {
+    const match = location.pathname.match(/^\/cmd\/([^/]+)/);
     return match ? match[1] : null;
   }, [location.pathname]);
   const productCodeFromPath = React.useMemo(() => {
@@ -1218,7 +1313,7 @@ export default function App() {
     async (profileId: string): Promise<LegalEntityRow | null> => {
       if (!supabaseClient) return null;
       const { data, error } = await supabaseClient
-        .from('legal_entities')
+        .from('legal_entities_public')
         .select('*')
         .eq('profile_id', profileId)
         .maybeSingle();
@@ -1319,6 +1414,25 @@ export default function App() {
     [fetchLegalEntity, supabaseClient]
   );
 
+  const fetchProfileById = React.useCallback(
+    async (profileId: string): Promise<User | null> => {
+      if (!supabaseClient) return null;
+      const { data, error } = await supabaseClient
+        .from('profiles')
+        .select('*')
+        .eq('id', profileId)
+        .maybeSingle();
+      if (error) {
+        console.warn('profiles fetch by id error', error);
+        return null;
+      }
+      if (!data) return null;
+      const legal = await fetchLegalEntity(profileId);
+      return mapProfileRowToUser(data as ProfileRow, null, legal);
+    },
+    [fetchLegalEntity, supabaseClient]
+  );
+
   React.useEffect(() => {
     if (!supabaseClient) {
       return;
@@ -1367,14 +1481,41 @@ export default function App() {
   const isProfileAuthPage = !isAuthenticated && location.pathname === '/profil';
   const isAuthLayout = isAuthPage || isProfileAuthPage;
   const orderBuilderSource = orderBuilderProducts ?? deck;
-  const orderProducer = React.useMemo(() => {
+  const [orderProducer, setOrderProducer] = React.useState<User | null>(null);
+
+  React.useEffect(() => {
     const sourceProducts = orderBuilderProducts ?? deck;
     const firstProducerId = sourceProducts[0]?.producerId;
-    if (!firstProducerId) return null;
-    if (profileForShare && profileForShare.producerId === firstProducerId) return profileForShare;
-    if (user && user.producerId === firstProducerId) return user;
-    return null;
-  }, [deck, orderBuilderProducts, profileForShare, user]);
+    if (!firstProducerId) {
+      setOrderProducer(null);
+      return;
+    }
+    const matchesProducerId = (profile: User | null) =>
+      Boolean(profile && (profile.id === firstProducerId || profile.producerId === firstProducerId));
+
+    if (matchesProducerId(profileForShare)) {
+      setOrderProducer(profileForShare);
+      return;
+    }
+    if (matchesProducerId(user)) {
+      setOrderProducer(user);
+      return;
+    }
+    if (!isUuid(firstProducerId)) {
+      setOrderProducer(null);
+      return;
+    }
+
+    let active = true;
+    fetchProfileById(firstProducerId).then((profile) => {
+      if (!active) return;
+      setOrderProducer(profile);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [deck, fetchProfileById, orderBuilderProducts, profileForShare, user]);
 
   const normalizedSearch = normalizeText(searchQuery.trim());
   const applyProductFilters = filterScope !== 'producers';
@@ -1515,8 +1656,12 @@ export default function App() {
   const currentProducerId =
     viewer.role === 'producer' ? viewer.producerId ?? 'current-user' : viewer.producerId ?? '';
   const selectedOrder = React.useMemo(
-    () => (orderIdFromPath ? groupOrders.find((order) => order.id === orderIdFromPath) ?? null : null),
-    [groupOrders, orderIdFromPath]
+    () =>
+      orderCodeFromPath
+        ? groupOrders.find((order) => order.orderCode === orderCodeFromPath || order.id === orderCodeFromPath) ??
+          null
+        : null,
+    [groupOrders, orderCodeFromPath]
   );
   const selectedProduct = React.useMemo(() => {
     if (!productCodeFromPath) return null;
@@ -1583,8 +1728,14 @@ export default function App() {
     if (!lastTabRef.current) {
       lastTabRef.current = location.pathname;
     }
-    navigate(`/commande/${orderId}`);
+    const order = groupOrders.find((entry) => entry.id === orderId || entry.orderCode === orderId);
+    const orderCode = order?.orderCode ?? orderId;
+    navigate(`/cmd/${orderCode}`);
   };
+  const resolveOrderCode = React.useCallback(
+    (orderId: string) => groupOrders.find((entry) => entry.id === orderId)?.orderCode ?? orderId,
+    [groupOrders]
+  );
 
   const openProductView = (productId: string) => {
     const product =
@@ -1713,10 +1864,10 @@ export default function App() {
     setPurchaseDraft(draft);
     setRecentPurchase(null);
     if (!isAuthenticated) {
-      redirectToAuth(`/commande/${order.id}/paiement`);
+      redirectToAuth(`/cmd/${resolveOrderCode(order.id)}/paiement`);
       return;
     }
-    navigate(`/commande/${order.id}/paiement`);
+    navigate(`/cmd/${resolveOrderCode(order.id)}/paiement`);
   };
 
   const handlePurchaseOrder = (orderId: string, total?: number, weight?: number) => {
@@ -1739,15 +1890,59 @@ export default function App() {
     );
   };
 
-  const handleConfirmPayment = (draft: OrderPurchaseDraft) => {
+  const handleConfirmPayment = async (draft: OrderPurchaseDraft) => {
     if (!isAuthenticated) {
       redirectToAuth(location.pathname);
       return;
     }
+    const order = groupOrders.find((entry) => entry.id === draft.orderId);
+    if (!order) {
+      toast.error('Commande introuvable.');
+      return;
+    }
+    if (!user) {
+      toast.error('Utilisateur introuvable.');
+      return;
+    }
+
+    try {
+      const existingParticipant = await getParticipantByProfile(order.id, user.id);
+      const participant =
+        existingParticipant ?? (await requestParticipation(order.orderCode ?? order.id, user.id));
+      const productsByCode = new Map(order.products.map((product) => [product.id, product]));
+
+      for (const [productCode, rawQty] of Object.entries(draft.quantities)) {
+        const quantityUnits = Math.max(0, Number(rawQty) || 0);
+        if (quantityUnits <= 0) continue;
+        const product = productsByCode.get(productCode);
+        if (!product?.dbId) {
+          console.warn('Produit introuvable pour la participation:', productCode);
+          continue;
+        }
+        await addItem({
+          orderId: order.id,
+          participantId: participant.id,
+          productId: product.dbId,
+          quantityUnits,
+        });
+      }
+
+      await createPaymentStub({
+        orderId: order.id,
+        participantId: participant.id,
+        amountCents: eurosToCents(draft.total),
+        status: 'paid',
+      });
+    } catch (error) {
+      console.error('Payment finalize error:', error);
+      toast.error('Impossible de finaliser le paiement.');
+      return;
+    }
+
     handlePurchaseOrder(draft.orderId, draft.total, draft.weight);
     setRecentPurchase(draft);
     setPurchaseDraft(null);
-    navigate(`/commande/${draft.orderId}/partage`);
+    navigate(`/cmd/${resolveOrderCode(draft.orderId)}/partage`);
     toast.success('Paiement confirme (simulation).');
   };
 
@@ -2173,29 +2368,6 @@ export default function App() {
       return;
     }
 
-      const payload = {
-        name: userData.name ?? user.name,
-        handle: nextHandle,
-        role: normalizedRole,
-        account_type: nextAccountType,
-        tagline: userData.tagline ?? user.tagline,
-        website: userData.website ?? user.website,
-        address: userData.address ?? user.address,
-        address_details: nextAddressDetails || null,
-        city: userData.city ?? user.city,
-        postcode: userData.postcode ?? user.postcode,
-        phone: userData.phone ?? user.phone,
-        phone_public: userData.phonePublic ?? user.phonePublic,
-      contact_email_public: userData.contactEmailPublic ?? user.contactEmailPublic,
-      offers_on_site_pickup: userData.offersOnSitePickup ?? user.offersOnSitePickup ?? false,
-      fresh_products_certified: userData.freshProductsCertified ?? user.freshProductsCertified ?? false,
-      social_links: userData.socialLinks ?? user.socialLinks ?? null,
-      opening_hours: userData.openingHours ?? user.openingHours ?? null,
-      profile_visibility: userData.profileVisibility ?? user.profileVisibility ?? 'public',
-      address_visibility: userData.addressVisibility ?? user.addressVisibility ?? 'private',
-      producer_id: userData.producerId ?? user.producerId,
-    };
-
     if (nextHandle !== user.handle) {
       const { data: existing, error: existingError } = await supabaseClient
         .from('profiles')
@@ -2211,6 +2383,70 @@ export default function App() {
         return;
       }
     }
+
+    const normalizeValue = (value?: string | null) => (value ?? '').trim();
+    const nextAddress = normalizeValue(userData.address ?? user.address);
+    const nextCity = normalizeValue(userData.city ?? user.city);
+    const nextPostcode = normalizeValue(userData.postcode ?? user.postcode);
+    const currentAddress = normalizeValue(user.address);
+    const currentCity = normalizeValue(user.city);
+    const currentPostcode = normalizeValue(user.postcode);
+    const currentAddressDetails = normalizeValue(user.addressDetails);
+    const addressChanged =
+      nextAddress !== currentAddress ||
+      nextCity !== currentCity ||
+      nextPostcode !== currentPostcode ||
+      nextAddressDetails !== currentAddressDetails;
+    const hasCompleteAddress = Boolean(nextAddress && nextCity && nextPostcode);
+
+    let nextAddressLat: number | null = user.addressLat ?? null;
+    let nextAddressLng: number | null = user.addressLng ?? null;
+    if (!hasCompleteAddress) {
+      nextAddressLat = null;
+      nextAddressLng = null;
+    } else if (
+      addressChanged ||
+      !Number.isFinite(user.addressLat ?? NaN) ||
+      !Number.isFinite(user.addressLng ?? NaN)
+    ) {
+      const query = [nextAddress, nextAddressDetails, `${nextPostcode} ${nextCity}`]
+        .filter(Boolean)
+        .join(', ');
+      const coords = await geocodeAddress(query);
+      if (coords) {
+        nextAddressLat = coords.lat;
+        nextAddressLng = coords.lng;
+      } else {
+        nextAddressLat = null;
+        nextAddressLng = null;
+        toast.error('Adresse introuvable. Verifiez les champs.');
+      }
+    }
+
+    const payload = {
+      name: userData.name ?? user.name,
+      handle: nextHandle,
+      role: normalizedRole,
+      account_type: nextAccountType,
+      tagline: userData.tagline ?? user.tagline,
+      website: userData.website ?? user.website,
+      address: nextAddress,
+      address_details: nextAddressDetails || null,
+      city: nextCity,
+      postcode: nextPostcode,
+      address_lat: nextAddressLat,
+      address_lng: nextAddressLng,
+      phone: userData.phone ?? user.phone,
+      phone_public: userData.phonePublic ?? user.phonePublic,
+      contact_email_public: userData.contactEmailPublic ?? user.contactEmailPublic,
+      offers_on_site_pickup: userData.offersOnSitePickup ?? user.offersOnSitePickup ?? false,
+      fresh_products_certified: userData.freshProductsCertified ?? user.freshProductsCertified ?? false,
+      social_links: userData.socialLinks ?? user.socialLinks ?? null,
+      opening_hours: userData.openingHours ?? user.openingHours ?? null,
+      profile_visibility: userData.profileVisibility ?? user.profileVisibility ?? 'public',
+      address_visibility: userData.addressVisibility ?? user.addressVisibility ?? 'private',
+      producer_id: userData.producerId ?? user.producerId,
+    };
 
     const { data, error } = await supabaseClient
       .from('profiles')
@@ -2547,13 +2783,13 @@ export default function App() {
     if (location.pathname.startsWith('/produits/') || location.pathname.startsWith('/produit/')) {
       return selectedProduct?.name ?? 'Produit';
     }
-    if (location.pathname.startsWith('/commande/')) return 'Commande';
+    if (location.pathname.startsWith('/cmd/')) return 'Commande';
     return '';
   };
 
   const pageTitle = getPageTitle();
-  const isOrderView = Boolean(selectedOrder && location.pathname.startsWith('/commande/'));
-  const isOrderFlowStep = /\/commande\/[^/]+\/(recap|paiement|partage)/.test(location.pathname);
+  const isOrderView = Boolean(selectedOrder && location.pathname.startsWith('/cmd/'));
+  const isOrderFlowStep = /\/cmd\/[^/]+\/(recap|paiement|partage)/.test(location.pathname);
   const isProductView = Boolean(
     selectedProduct &&
       (location.pathname.startsWith('/produits/') || location.pathname.startsWith('/produit/'))
@@ -2738,45 +2974,16 @@ export default function App() {
     );
   };
 
-  const OrderRoute = () => {
-    const params = useParams<{ id: string }>();
-    const order = groupOrders.find((o) => o.id === params.id);
-    if (!order) return <NotFound message="Commande introuvable." />;
-    const draftQuantities = purchaseDraft?.orderId === order.id ? purchaseDraft.quantities : undefined;
-
-    return (
-      <OrderClientView
-        order={order}
-        onClose={closeOrderView}
-        onVisibilityChange={(visibility) => handleUpdateOrderVisibility(order.id, visibility)}
-        onAutoApproveParticipationRequestsChange={(value) =>
-          handleUpdateOrderParticipantSettings(order.id, { autoApproveParticipationRequests: value })
-        }
-        onAllowSharerMessagesChange={(value) =>
-          handleUpdateOrderParticipantSettings(order.id, { allowSharerMessages: value })
-        }
-        onAutoApprovePickupSlotsChange={(value) =>
-          handleUpdateOrderParticipantSettings(order.id, { autoApprovePickupSlots: value })
-        }
-        onPurchase={(payload) => handleStartPurchase(order, payload)}
-        initialQuantities={draftQuantities}
-        isOwner={Boolean(user && order.sharerId === user.id)}
-        onOpenParticipantProfile={openSharerProfile}
-        isAuthenticated={isAuthenticated}
-      />
-    );
-  };
-
   const OrderRecapRedirect = () => {
-    const params = useParams<{ id: string }>();
-    const orderId = params.id;
-    if (!orderId) return <Navigate to={tabRoutes.home} replace />;
-    return <Navigate to={`/commande/${orderId}/paiement`} replace />;
+    const params = useParams<{ orderCode: string }>();
+    const orderCode = params.orderCode;
+    if (!orderCode) return <Navigate to={tabRoutes.home} replace />;
+    return <Navigate to={`/cmd/${orderCode}/paiement`} replace />;
   };
 
   const OrderPaymentRoute = () => {
-    const params = useParams<{ id: string }>();
-    const order = groupOrders.find((o) => o.id === params.id);
+    const params = useParams<{ orderCode: string }>();
+    const order = groupOrders.find((o) => o.orderCode === params.orderCode || o.id === params.orderCode);
     if (!order) return <NotFound message="Commande introuvable." />;
     if (!isAuthenticated) {
       return (
@@ -2794,15 +3001,15 @@ export default function App() {
       <OrderPaymentView
         order={order}
         draft={draft}
-        onBack={() => navigate(`/commande/${order.id}`)}
+        onBack={() => navigate(`/cmd/${order.orderCode ?? order.id}`)}
         onConfirmPayment={() => handleConfirmPayment(draft)}
       />
     );
   };
 
   const OrderShareRoute = () => {
-    const params = useParams<{ id: string }>();
-    const order = groupOrders.find((o) => o.id === params.id);
+    const params = useParams<{ orderCode: string }>();
+    const order = groupOrders.find((o) => o.orderCode === params.orderCode || o.id === params.orderCode);
     if (!order) return <NotFound message="Commande introuvable." />;
     if (!isAuthenticated) {
       return (
@@ -3133,6 +3340,10 @@ export default function App() {
             )}
           />
           <Route
+            path="/produits/:productSlug/lot/:lotCode/cmd/:orderCode"
+            element={<OrderProductContextView />}
+          />
+          <Route
             path="/produits/:slugAndCode"
             element={
               <ProductRouteView
@@ -3199,19 +3410,27 @@ export default function App() {
             }
           />
           <Route
-            path="/commande/:id"
-            element={<OrderRoute />}
+            path="/cmd/:orderCode"
+            element={
+              <OrderRoute
+                groupOrders={groupOrders}
+                currentUser={user}
+                onClose={closeOrderView}
+                onOpenParticipantProfile={openSharerProfile}
+                onStartPurchase={handleStartPurchase}
+              />
+            }
           />
           <Route
-            path="/commande/:id/recap"
+            path="/cmd/:orderCode/recap"
             element={<OrderRecapRedirect />}
           />
           <Route
-            path="/commande/:id/paiement"
+            path="/cmd/:orderCode/paiement"
             element={<OrderPaymentRoute />}
           />
           <Route
-            path="/commande/:id/partage"
+            path="/cmd/:orderCode/partage"
             element={<OrderShareRoute />}
           />
           <Route path="/commandes" element={<OrdersSearchRoute />} />

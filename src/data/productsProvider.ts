@@ -108,6 +108,7 @@ const mapListingRowToProduct = (row: ProductListingRow, client: SupabaseClient |
   return {
     id: row.product_code,
     productCode: row.product_code,
+    dbId: row.product_id,
     slug: row.slug,
     activeLotCode: row.active_lot_code ?? undefined,
     activeLotId: row.active_lot_id ?? undefined,
@@ -567,6 +568,7 @@ const mapProductRowToProduct = (row: DbProduct, selectedLot: DbLot | null, clien
   return {
     id: row.product_code,
     productCode: row.product_code,
+    dbId: row.id,
     slug: row.slug,
     activeLotCode: selectedLot?.lot_code ?? undefined,
     activeLotId: selectedLot?.id ?? undefined,

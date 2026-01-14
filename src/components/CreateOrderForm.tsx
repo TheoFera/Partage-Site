@@ -1,14 +1,18 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { DeckCard, DeliveryDay, DeliveryLeadType, User } from '../types';
 import { Calendar, MapPin, Package, Percent, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CARD_WIDTH, CARD_HEIGHT, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { ProductResultCard } from './ProductsLanding';
 import { eurosToCents, formatEurosFromCents } from '../lib/money';
+import { toast } from 'sonner';
+import { createOrder } from '../services/orders';
+import { DEMO_MODE } from '../data/productsProvider';
 
 interface CreateOrderFormProps {
   products: DeckCard[];
-  onCreateOrder: (order: any) => void;
+  onCreateOrder?: (order: any) => void;
   preselectedProductIds?: string[];
   onCancel?: () => void;
   user?: User | null;
@@ -64,6 +68,10 @@ const deliveryDayLabels: Record<DeliveryDay, string> = {
   sunday: 'Dimanche',
 };
 
+const DELIVERY_GEOCODE_CACHE_KEY = 'delivery-geocode-cache';
+const DELIVERY_GEOCODE_CACHE_LIMIT = 50;
+const DELIVERY_GEOCODE_DEBOUNCE_MS = 650;
+
 function getProductWeightKg(product: DeckCard) {
   if (product.weightKg) return product.weightKg;
   const unit = product.unit?.toLowerCase() ?? '';
@@ -96,19 +104,20 @@ const distanceKm = (from: GeoPoint, to: GeoPoint) => {
 
 export function CreateOrderForm({
   products,
-  onCreateOrder,
   preselectedProductIds,
+  onCreateOrder,
   onCancel,
   user,
   producer,
 }: CreateOrderFormProps) {
+  const navigate = useNavigate();
   const [selectedProducts, setSelectedProducts] = React.useState<string[]>(preselectedProductIds ?? []);
   const [title, setTitle] = React.useState('');
   const [visibility, setVisibility] = React.useState<'public' | 'private'>('public');
   const [sharerPercentage, setSharerPercentage] = React.useState(8);
-  const [autoApproveParticipationRequests, setAutoApproveParticipationRequests] = React.useState(false);
+  const [autoApproveParticipationRequests, setAutoApproveParticipationRequests] = React.useState(true);
   const [allowSharerMessages, setAllowSharerMessages] = React.useState(true);
-  const [autoApprovePickupSlots, setAutoApprovePickupSlots] = React.useState(false);
+  const [autoApprovePickupSlots, setAutoApprovePickupSlots] = React.useState(true);
   const [minWeight, setMinWeight] = React.useState(5);
   const [maxWeight, setMaxWeight] = React.useState(20);
   const [deadline, setDeadline] = React.useState('');
@@ -133,24 +142,26 @@ export function CreateOrderForm({
   const [pickupDateSlots, setPickupDateSlots] = React.useState<PickupSlot[]>([]);
   const [deliveryGeoStatus, setDeliveryGeoStatus] = React.useState<'idle' | 'loading' | 'resolved' | 'error'>('idle');
   const [deliveryGeoCoords, setDeliveryGeoCoords] = React.useState<GeoPoint | null>(null);
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const geocodeCacheRef = React.useRef<Map<string, GeoPoint>>(new Map());
 
   const producerLegal = producer?.legalEntity;
   const deliveryOptionConfig = React.useMemo(
     () => ({
       chronofresh: {
-        enabled: producerLegal ? Boolean(producerLegal.chronofreshEnabled) : true,
+        enabled: Boolean(producerLegal?.chronofreshEnabled),
         minWeight: producerLegal?.chronofreshMinWeight,
         maxWeight: producerLegal?.chronofreshMaxWeight,
         days: [] as DeliveryDay[],
       },
       producer_delivery: {
-        enabled: producerLegal ? Boolean(producerLegal.producerDeliveryEnabled) : true,
+        enabled: Boolean(producerLegal?.producerDeliveryEnabled),
         minWeight: producerLegal?.producerDeliveryMinWeight,
         maxWeight: producerLegal?.producerDeliveryMaxWeight,
         days: producerLegal?.producerDeliveryDays ?? [],
       },
       producer_pickup: {
-        enabled: producerLegal ? Boolean(producerLegal.producerPickupEnabled) : true,
+        enabled: Boolean(producerLegal?.producerPickupEnabled),
         minWeight: producerLegal?.producerPickupMinWeight,
         maxWeight: producerLegal?.producerPickupMaxWeight,
         days: producerLegal?.producerPickupDays ?? [],
@@ -159,15 +170,91 @@ export function CreateOrderForm({
     [producerLegal]
   );
 
-  const deliveryAddressQuery = React.useMemo(() => {
-    const parts = [deliveryStreet, deliveryPostcode, deliveryCity]
-      .map((value) => value.trim())
-      .filter(Boolean);
-    return parts.join(', ');
-  }, [deliveryCity, deliveryPostcode, deliveryStreet]);
   const isDeliveryAddressComplete = Boolean(
     deliveryStreet.trim() && deliveryPostcode.trim() && deliveryCity.trim()
   );
+  const deliveryAddressQuery = React.useMemo(() => {
+    const parts = [deliveryStreet, deliveryInfo, deliveryPostcode, deliveryCity]
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return parts.join(', ');
+  }, [deliveryCity, deliveryInfo, deliveryPostcode, deliveryStreet]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem(DELIVERY_GEOCODE_CACHE_KEY);
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as Record<string, GeoPoint>;
+      Object.entries(parsed).forEach(([key, value]) => {
+        if (Number.isFinite(value?.lat) && Number.isFinite(value?.lng)) {
+          geocodeCacheRef.current.set(key, { lat: Number(value.lat), lng: Number(value.lng) });
+        }
+      });
+    } catch {
+      // ignore cache parse errors
+    }
+  }, []);
+
+  const readGeocodeCache = React.useCallback((key: string) => geocodeCacheRef.current.get(key), []);
+  const writeGeocodeCache = React.useCallback((key: string, coords: GeoPoint) => {
+    const cache = geocodeCacheRef.current;
+    cache.set(key, coords);
+    if (cache.size > DELIVERY_GEOCODE_CACHE_LIMIT) {
+      const firstKey = cache.keys().next().value;
+      if (firstKey) cache.delete(firstKey);
+    }
+    if (typeof window === 'undefined') return;
+    try {
+      const payload = Object.fromEntries(cache.entries());
+      window.localStorage.setItem(DELIVERY_GEOCODE_CACHE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!user) return;
+    setDeliveryStreet((prev) => {
+      if (prev.trim()) return prev;
+      const next = user.address?.trim();
+      return next ? next : prev;
+    });
+    setDeliveryInfo((prev) => {
+      if (prev.trim()) return prev;
+      const next = user.addressDetails?.trim();
+      return next ? next : prev;
+    });
+    setDeliveryCity((prev) => {
+      if (prev.trim()) return prev;
+      const next = user.city?.trim();
+      return next ? next : prev;
+    });
+    setDeliveryPostcode((prev) => {
+      if (prev.trim()) return prev;
+      const next = user.postcode?.trim();
+      return next ? next : prev;
+    });
+  }, [user]);
+
+  const deliveryProfileCoords = React.useMemo(() => {
+    const lat = user?.addressLat;
+    const lng = user?.addressLng;
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { lat: Number(lat), lng: Number(lng) };
+    }
+    return null;
+  }, [user?.addressLat, user?.addressLng]);
+  const isDeliveryAddressFromProfile = React.useMemo(() => {
+    if (!user) return false;
+    const norm = (value?: string | null) => (value ?? '').trim().toLowerCase();
+    return (
+      norm(deliveryStreet) === norm(user.address) &&
+      norm(deliveryCity) === norm(user.city) &&
+      norm(deliveryPostcode) === norm(user.postcode) &&
+      norm(deliveryInfo) === norm(user.addressDetails ?? '')
+    );
+  }, [deliveryCity, deliveryInfo, deliveryPostcode, deliveryStreet, user]);
 
   const producerCoords = React.useMemo(() => {
     const lat = producer?.addressLat;
@@ -182,7 +269,6 @@ export function CreateOrderForm({
     ? Math.max(0, producerLegal?.producerDeliveryRadiusKm ?? 0)
     : 0;
   const shouldCheckDeliveryZone = Boolean(producerLegal?.producerDeliveryEnabled);
-  const shouldGeocodeDeliveryAddress = shouldCheckDeliveryZone && normalizedProducerDeliveryRadiusKm > 0;
 
   const deliveryDistanceKm = React.useMemo(() => {
     if (!producerCoords || !deliveryGeoCoords) return null;
@@ -274,7 +360,12 @@ export function CreateOrderForm({
     }, {} as Record<DeliveryOption, { eligible: boolean; reason?: string }>);
   }, [deliveryOptionConfig, deliveryZoneInfo, maxWeight, minWeight]);
 
-  const enabledDeliveryOptions = deliveryOptions.filter((option) => deliveryOptionStates[option.id]?.eligible);
+  const producerEnabledDeliveryOptions = deliveryOptions.filter(
+    (option) => deliveryOptionConfig[option.id]?.enabled
+  );
+  const enabledDeliveryOptions = producerEnabledDeliveryOptions.filter(
+    (option) => deliveryOptionStates[option.id]?.eligible
+  );
   const activeDeliveryConfig = deliveryOptionConfig[deliveryOption] ?? deliveryOptionConfig.chronofresh;
   const minWeightLimit = activeDeliveryConfig?.minWeight ?? 0;
   const maxWeightLimit = activeDeliveryConfig?.maxWeight ?? 0;
@@ -560,6 +651,11 @@ export function CreateOrderForm({
     : [pickupStreet, pickupInfo, [pickupPostcode, pickupCity].filter(Boolean).join(' ') || undefined]
         .filter(Boolean)
         .join(', ');
+  const deliveryCoords = deliveryGeoCoords;
+  const deliveryLat = deliveryCoords?.lat ?? null;
+  const deliveryLng = deliveryCoords?.lng ?? null;
+  const pickupLat = useSamePickupAddress ? deliveryLat : null;
+  const pickupLng = useSamePickupAddress ? deliveryLng : null;
   const selectedDeliveryOption = deliveryOptions.find((option) => option.id === deliveryOption);
   const selectedDeliveryOptionState = deliveryOptionStates[deliveryOption];
   const isDeliveryOptionValid = selectedDeliveryOptionState?.eligible ?? true;
@@ -629,48 +725,75 @@ export function CreateOrderForm({
   }, [canReceiveCashShare, shareMode]);
 
   React.useEffect(() => {
-    if (!shouldGeocodeDeliveryAddress || !isDeliveryAddressComplete) {
+    if (!isDeliveryAddressComplete) {
       setDeliveryGeoCoords(null);
       setDeliveryGeoStatus('idle');
       return;
     }
-    let isActive = true;
-    const controller = new AbortController();
-    setDeliveryGeoStatus('loading');
-    fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(deliveryAddressQuery)}&limit=1`,
-      {
-        signal: controller.signal,
-        headers: {
-          'Accept-Language': 'fr',
-        },
-      }
-    )
-      .then((res) => res.json())
-      .then((results) => {
-        if (!isActive) return;
-        const candidate = Array.isArray(results) ? results[0] : null;
-        const lat = Number(candidate?.lat);
-        const lng = Number(candidate?.lon);
-        if (Number.isFinite(lat) && Number.isFinite(lng)) {
-          setDeliveryGeoCoords({ lat, lng });
-          setDeliveryGeoStatus('resolved');
-        } else {
-          setDeliveryGeoCoords(null);
-          setDeliveryGeoStatus('error');
-        }
-      })
-      .catch(() => {
-        if (!isActive) return;
+    if (isDeliveryAddressFromProfile) {
+      if (!deliveryProfileCoords) {
         setDeliveryGeoCoords(null);
         setDeliveryGeoStatus('error');
-      });
+        return;
+      }
+      setDeliveryGeoCoords(deliveryProfileCoords);
+      setDeliveryGeoStatus('resolved');
+      return;
+    }
+
+    const cacheKey = deliveryAddressQuery.trim().toLowerCase();
+    const cached = cacheKey ? readGeocodeCache(cacheKey) : undefined;
+    if (cached) {
+      setDeliveryGeoCoords(cached);
+      setDeliveryGeoStatus('resolved');
+      return;
+    }
+
+    setDeliveryGeoCoords(null);
+    setDeliveryGeoStatus('loading');
+    let active = true;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      const encoded = encodeURIComponent(deliveryAddressQuery);
+      fetch(`https://api-adresse.data.gouv.fr/search/?q=${encoded}&limit=1`, {
+        signal: controller.signal,
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (!active) return;
+          const coords = (data?.features?.[0]?.geometry?.coordinates ?? []) as [number, number];
+          const lng = Number(coords?.[0]);
+          const lat = Number(coords?.[1]);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const next = { lat, lng };
+            setDeliveryGeoCoords(next);
+            setDeliveryGeoStatus('resolved');
+            if (cacheKey) writeGeocodeCache(cacheKey, next);
+          } else {
+            setDeliveryGeoCoords(null);
+            setDeliveryGeoStatus('error');
+          }
+        })
+        .catch(() => {
+          if (!active) return;
+          setDeliveryGeoCoords(null);
+          setDeliveryGeoStatus('error');
+        });
+    }, DELIVERY_GEOCODE_DEBOUNCE_MS);
 
     return () => {
-      isActive = false;
+      active = false;
+      clearTimeout(timer);
       controller.abort();
     };
-  }, [deliveryAddressQuery, isDeliveryAddressComplete, shouldGeocodeDeliveryAddress]);
+  }, [
+    deliveryAddressQuery,
+    deliveryProfileCoords,
+    isDeliveryAddressComplete,
+    isDeliveryAddressFromProfile,
+    readGeocodeCache,
+    writeGeocodeCache,
+  ]);
 
   React.useEffect(() => {
     if (enabledDeliveryOptions.length === 0) return;
@@ -747,41 +870,94 @@ export function CreateOrderForm({
       return;
     }
 
-    const activeSlots = usePickupDate
+    const activeSlots: PickupSlot[] = usePickupDate
       ? []
       : visibility === 'public'
-        ? pickupDateSlots
-            .filter((slot) => slot.enabled && slot.date)
-            .map((slot) => ({ date: slot.date, label: slot.label, start: slot.start, end: slot.end }))
-        : pickupSlots
-            .filter((slot) => slot.enabled && slot.day)
-            .map((slot) => ({ day: slot.day, label: slot.label, start: slot.start, end: slot.end }));
+        ? pickupDateSlots.filter((slot) => slot.enabled && slot.date)
+        : pickupSlots.filter((slot) => slot.enabled && slot.day);
 
-    onCreateOrder({
-      title,
+    if (!user) {
+      toast.info('Connectez-vous pour creer une commande.');
+      return;
+    }
+
+    const participantVisibility = {
+      profile: false,
+      content: false,
+      weight: false,
+      amount: false,
+    };
+
+    const sharerSelectionWeight = selectedProductsData.reduce((sum, product) => {
+      const qty = shareQuantities[product.id] ?? 0;
+      return sum + getProductWeightKg(product) * qty;
+    }, 0);
+
+    const baseTotal = perProductRows.reduce((sum, r) => sum + r.basePrice, 0);
+    const participantTotal = perProductRows.reduce((sum, r) => sum + r.participantPrice, 0);
+
+    const orderDraft = {
       products: selectedProductsData,
+      title,
       visibility,
+      deadline: deadline ? new Date(deadline) : null,
+      message,
       autoApproveParticipationRequests,
       allowSharerMessages,
       autoApprovePickupSlots,
-      sharerPercentage,
-      shareMode,
-      shareQuantities,
       minWeight: normalizedMinWeight,
       maxWeight: normalizedMaxWeight,
+      pickupWindowWeeks: visibility === 'public' ? pickupWindowWeeks : undefined,
+      pickupStreet: useSamePickupAddress ? deliveryStreet : pickupStreet,
+      pickupInfo: useSamePickupAddress ? deliveryInfo : pickupInfo,
+      pickupCity: useSamePickupAddress ? deliveryCity : pickupCity,
+      pickupPostcode: useSamePickupAddress ? deliveryPostcode : pickupPostcode,
+      pickupAddress,
+      pickupSlots: activeSlots.map((slot) => ({
+        day: slot.day,
+        date: slot.date,
+        label: slot.label,
+        start: slot.start,
+        end: slot.end,
+      })),
+      pickupDeliveryFee: deliveryOption === 'producer_pickup' ? pickupDeliveryFee : 0,
+      shareMode,
+      sharerPercentage,
+      shareQuantities,
+      totals: {
+        participantTotal,
+      },
+      estimatedDeliveryDate,
+    };
+
+    if (DEMO_MODE && onCreateOrder) {
+      onCreateOrder(orderDraft);
+      return;
+    }
+
+    setIsSubmitting(true);
+    createOrder({
+      userId: user.id,
+      productCodes: selectedProductsData.map((product) => product.id),
+      title,
+      visibility,
+      status: 'open',
       deadline: deadline ? new Date(deadline) : null,
       message,
+      autoApproveParticipationRequests,
+      allowSharerMessages,
+      autoApprovePickupSlots,
+      minWeightKg: normalizedMinWeight,
+      maxWeightKg: normalizedMaxWeight,
+      orderedWeightKg: shareMode === 'products' ? sharerSelectionWeight : 0,
+      deliveryOption,
       deliveryStreet,
+      deliveryInfo,
       deliveryCity,
       deliveryPostcode,
-      deliveryInfo,
       deliveryAddress,
-      deliveryOption,
-      deliveryLeadType: deliveryOption === 'chronofresh' ? fallbackLeadType : undefined,
-      deliveryLeadDays:
-        deliveryOption === 'chronofresh' && fallbackLeadType === 'days' ? fallbackLeadDays : undefined,
-      deliveryFixedDay:
-        deliveryOption === 'chronofresh' && fallbackLeadType === 'fixed_day' ? fallbackLeadFixedDay : undefined,
+      deliveryLat,
+      deliveryLng,
       estimatedDeliveryDate,
       pickupWindowWeeks: visibility === 'public' ? pickupWindowWeeks : undefined,
       pickupStreet: useSamePickupAddress ? deliveryStreet : pickupStreet,
@@ -789,17 +965,39 @@ export function CreateOrderForm({
       pickupCity: useSamePickupAddress ? deliveryCity : pickupCity,
       pickupPostcode: useSamePickupAddress ? deliveryPostcode : pickupPostcode,
       pickupAddress,
-      pickupSlots: activeSlots,
-      pickupDeliveryFee: deliveryOption === 'producer_pickup' ? pickupDeliveryFee : 0,
+      pickupLat,
+      pickupLng,
+      usePickupDate,
       pickupDate: usePickupDate && pickupDate ? new Date(pickupDate) : null,
-      totals: {
-        baseTotal: perProductRows.reduce((sum, r) => sum + r.basePrice, 0),
-        logTotal,
-        participantTotal: perProductRows.reduce((sum, r) => sum + r.participantPrice, 0),
-        share: totalShareEffective,
-        effectiveWeight,
-      },
-    });
+      pickupDeliveryFeeCents: deliveryOption === 'producer_pickup' ? eurosToCents(pickupDeliveryFee) : 0,
+      sharerPercentage,
+      shareMode,
+      sharerQuantities: shareQuantities,
+      baseTotalCents: eurosToCents(baseTotal),
+      deliveryFeeCents: eurosToCents(logTotal),
+      participantTotalCents: eurosToCents(participantTotal),
+      sharerShareCents: eurosToCents(totalShareEffective),
+      effectiveWeightKg: effectiveWeight,
+      participantsVisibility: participantVisibility,
+      slots: activeSlots.map((slot) => ({
+        slotType: slot.date ? 'date' : 'weekday',
+        day: slot.day,
+        slotDate: slot.date,
+        label: slot.label,
+        enabled: true,
+        startTime: slot.start,
+        endTime: slot.end,
+      })),
+    })
+      .then((orderCode) => {
+        toast.success('Commande creee avec succes.');
+        navigate(`/cmd/${orderCode}`);
+      })
+      .catch((error) => {
+        console.error('Order creation error:', error);
+        toast.error('Impossible de creer la commande.');
+      })
+      .finally(() => setIsSubmitting(false));
   };
 
   if (products.length === 0) {
@@ -1019,9 +1217,15 @@ export function CreateOrderForm({
                   <input
                     type="text"
                     value={deliveryPostcode}
-                    onChange={(e) => setDeliveryPostcode(e.target.value)}
+                    onChange={(e) => {
+                      const next = e.target.value.replace(/\D/g, '').slice(0, 5);
+                      setDeliveryPostcode(next);
+                    }}
                     placeholder="Code postal"
-                    pattern="\\d{4,5}"
+                    inputMode="numeric"
+                    autoComplete="postal-code"
+                    pattern="[0-9]{4,5}"
+                    maxLength={5}
                     className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     required
                   />
@@ -1067,7 +1271,7 @@ export function CreateOrderForm({
             <div className="space-y-2">
               <label>Option de livraison</label>
               <div>
-                {deliveryOptions.map((option) => {
+                {producerEnabledDeliveryOptions.map((option) => {
                   const optionConfig = deliveryOptionConfig[option.id];
                   const optionState = deliveryOptionStates[option.id];
                   const isEnabled = optionState?.eligible ?? true;
@@ -1285,7 +1489,7 @@ export function CreateOrderForm({
                   checked={useSamePickupAddress}
                   onChange={(e) => setUseSamePickupAddress(e.target.checked)}
                 />
-                Meme adresse de retrait que de livraison
+                Même adresse de retrait que l'adresse de livraison
               </label>
               {useSamePickupAddress ? (
                 <p className="text-xs text-[#6B7280]">L'adresse précise n'est communiquée aux participants qu'après paiement.</p>
@@ -1327,9 +1531,15 @@ export function CreateOrderForm({
                       <input
                         type="text"
                         value={pickupPostcode}
-                        onChange={(e) => setPickupPostcode(e.target.value)}
+                        onChange={(e) => {
+                          const next = e.target.value.replace(/\D/g, '').slice(0, 5);
+                          setPickupPostcode(next);
+                        }}
                         placeholder="Code postal"
-                        pattern="\\d{4,5}"
+                        inputMode="numeric"
+                        autoComplete="postal-code"
+                        pattern="[0-9]{4,5}"
+                        maxLength={5}
                         className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                         required={!useSamePickupAddress}
                       />
@@ -1343,11 +1553,11 @@ export function CreateOrderForm({
             </div>
 
             <div>
-              <label className="block text-sm text-[#6B7280] mb-2">Message participants</label>
+              <label className="block text-sm text-[#6B7280] mb-2">Message aux participants</label>
               <textarea
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Ex. Retrait chez moi, à l'adresse enregistree."
+                placeholder="Ex. Retrait chez moi, à l'adresse enregistrée."
                 rows={4}
                 className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
               />
@@ -1614,7 +1824,7 @@ export function CreateOrderForm({
       <div className="mt-6 flex flex-col sm:flex-row gap-3">
         <button
           type="submit"
-          disabled={selectedProducts.length === 0 || !isDeliveryOptionValid}
+          disabled={selectedProducts.length === 0 || !isDeliveryOptionValid || isSubmitting}
           className="w-full sm:flex-1 py-3 bg-[#FF6B4A] text-white rounded-xl hover:bg-[#FF5A39] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors shadow-lg"
         >
           Créer la commande
@@ -1980,3 +2190,4 @@ function ProducerProductCarousel({
     </div>
   );
 }
+

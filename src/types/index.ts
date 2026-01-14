@@ -66,6 +66,7 @@ export interface LegalEntity {
 export interface Product {
   id: string;
   productCode?: string;
+  dbId?: string;
   slug?: string;
   activeLotCode?: string;
   activeLotId?: string;
@@ -90,6 +91,7 @@ export interface DeckCard extends Product {
 
 export interface GroupOrder {
   id: string;
+  orderCode?: string;
   title: string;
   sharerId: string;
   sharerName: string;

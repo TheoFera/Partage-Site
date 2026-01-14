@@ -71,7 +71,7 @@ export function ClientSwipeView({
           sortedProducts.length > 1 ? `${sortedProducts.length} produits` : '1 produit';
         return {
           id: order.id,
-          orderId: order.id,
+          orderId: order.orderCode ?? order.id,
           title: order.title || order.producerName,
           location,
           tags: [order.sharerName, productCountLabel].filter(Boolean) as string[],

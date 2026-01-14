@@ -1,4 +1,5 @@
 import React from 'react';
+import { useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   CalendarClock,
@@ -9,37 +10,44 @@ import {
   Scale,
   SlidersHorizontal,
   ShoppingCart,
+  ShieldCheck,
   Users,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { GroupOrder } from '../types';
+import type { User, Product } from '../types';
 import { ProductResultCard } from './ProductsLanding';
 import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
 import { toast } from 'sonner';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import './OrderClientView.css';
 import { eurosToCents, formatEurosFromCents } from '../lib/money';
+import {
+  addItem,
+  approveParticipation,
+  createPaymentStub,
+  getOrderFullByCode,
+  rejectParticipation,
+  requestParticipation,
+  setParticipantPickupSlot,
+  updateParticipantsVisibility,
+  updateOrderParticipantSettings,
+  updateOrderVisibility,
+} from '../services/orders';
+import { centsToEuros, type OrderFull } from '../types/orders';
 
 interface OrderClientViewProps {
-  order: GroupOrder;
   onClose: () => void;
-  onVisibilityChange?: (visibility: GroupOrder['visibility']) => void;
-  onAutoApproveParticipationRequestsChange?: (value: boolean) => void;
-  onAllowSharerMessagesChange?: (value: boolean) => void;
-  onAutoApprovePickupSlotsChange?: (value: boolean) => void;
-  onPurchase?: (payload: { quantities: Record<string, number>; total: number; weight: number }) => void;
-  initialQuantities?: Record<string, number>;
-  isOwner?: boolean;
+  currentUser?: User | null;
   onOpenParticipantProfile?: (participantName: string) => void;
-  isAuthenticated?: boolean;
+  onStartPayment?: (payload: { quantities: Record<string, number>; total: number; weight: number }) => void;
 }
 
 function formatPrice(value: number) {
   return formatEurosFromCents(eurosToCents(value));
 }
 
-function labelForDay(day?: string) {
+function labelForDay(day?: string | null) {
   const map: Record<string, string> = {
     monday: 'Lundi',
     tuesday: 'Mardi',
@@ -53,7 +61,13 @@ function labelForDay(day?: string) {
   return map[day] ?? day;
 }
 
-type PickupSlot = NonNullable<GroupOrder['pickupSlots']>[number];
+type PickupSlot = {
+  day?: string | null;
+  date?: string | null;
+  label?: string | null;
+  start?: string | null;
+  end?: string | null;
+};
 
 function formatPickupSlotLabel(slot: PickupSlot) {
   if (slot.date) {
@@ -66,7 +80,15 @@ function formatPickupSlotLabel(slot: PickupSlot) {
   return labelForDay(slot.label ?? slot.day);
 }
 
-function getProductWeightKg(product: GroupOrder['products'][number]) {
+function formatPickupSlotTime(value?: string | null) {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^(\d{1,2}:\d{2})(?::\d{2})?$/);
+  return match ? match[1] : trimmed;
+}
+
+function getProductWeightKg(product: { weightKg?: number; unit?: string; measurement?: 'unit' | 'kg' }) {
   if (product.weightKg) return product.weightKg;
   const unit = product.unit?.toLowerCase() ?? '';
   const match = unit.match(/([\d.,]+)\s*(kg|g)/);
@@ -111,102 +133,77 @@ const participantVisibilityOptions: Array<{ key: keyof ParticipantVisibility; la
   { key: 'amount', label: 'Montant de la participation' },
 ];
 
-const mockParticipantProfiles: Array<Pick<OrderParticipant, 'id' | 'name' | 'handle' | 'avatarUrl'>> = [
-  {
-    id: 'p-1',
-    name: 'Aline Morel',
-    handle: 'alinemorel',
-    avatarUrl:
-      'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=160&q=80',
-  },
-  {
-    id: 'p-2',
-    name: 'Theo Bernard',
-    handle: 'theobernard',
-    avatarUrl:
-      'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=160&q=80',
-  },
-  {
-    id: 'p-3',
-    name: 'Camille Leroy',
-    handle: 'camilleleroy',
-    avatarUrl:
-      'https://images.unsplash.com/photo-1544723795-3fb6469f5b39?auto=format&fit=crop&w=160&q=80',
-  },
-  {
-    id: 'p-4',
-    name: 'Nina Martin',
-    handle: 'ninamartin',
-    avatarUrl:
-      'https://images.unsplash.com/photo-1525134479668-1bee5c7c6845?auto=format&fit=crop&w=160&q=80',
-  },
-  {
-    id: 'p-5',
-    name: 'Lucas Petit',
-    handle: 'lucaspetit',
-    avatarUrl:
-      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=160&q=80',
-  },
-  {
-    id: 'p-6',
-    name: 'Sarah Noel',
-    handle: 'sarahnoel',
-    avatarUrl:
-      'https://images.unsplash.com/photo-1508214751196-bcfd4ca60f91?auto=format&fit=crop&w=160&q=80',
-  },
-];
+const emptyOrder: OrderFull['order'] = {
+  id: '',
+  orderCode: '',
+  createdBy: '',
+  sharerProfileId: '',
+  producerProfileId: '',
+  title: '',
+  visibility: 'public',
+  status: 'open',
+  deadline: null,
+  message: null,
+  autoApproveParticipationRequests: false,
+  allowSharerMessages: true,
+  autoApprovePickupSlots: false,
+  minWeightKg: 0,
+  maxWeightKg: null,
+  orderedWeightKg: 0,
+  deliveryOption: 'producer_pickup',
+  deliveryStreet: null,
+  deliveryInfo: null,
+  deliveryCity: null,
+  deliveryPostcode: null,
+  deliveryAddress: null,
+  deliveryLat: null,
+  deliveryLng: null,
+  estimatedDeliveryDate: null,
+  pickupStreet: null,
+  pickupInfo: null,
+  pickupCity: null,
+  pickupPostcode: null,
+  pickupAddress: null,
+  pickupLat: null,
+  pickupLng: null,
+  usePickupDate: false,
+  pickupDate: null,
+  pickupWindowWeeks: null,
+  pickupDeliveryFeeCents: 0,
+  sharerPercentage: 0,
+  shareMode: 'products',
+  sharerQuantities: {},
+  currency: 'EUR',
+  baseTotalCents: 0,
+  deliveryFeeCents: 0,
+  participantTotalCents: 0,
+  sharerShareCents: 0,
+  effectiveWeightKg: 0,
+  participantsVisibility: defaultParticipantVisibility,
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
+};
 
-const buildMockParticipants = (order: GroupOrder): OrderParticipant[] => {
-  const participants: OrderParticipant[] = [];
-  const sharerQuantities = order.sharerQuantities ?? {};
-  const hasSharerSelection = Object.values(sharerQuantities).some((qty) => qty > 0);
-
-  if (hasSharerSelection) {
-    const quantities: Record<string, number> = {};
-    order.products.forEach((product) => {
-      quantities[product.id] = Math.max(0, Number(sharerQuantities[product.id]) || 0);
-    });
-    participants.push({
-      id: `${order.id}-sharer`,
-      name: `${order.sharerName} (partageur)`,
-      quantities,
-    });
-  }
-
-  const baseCount = Math.min(Math.max(order.participants ?? 0, 0), mockParticipantProfiles.length);
-  const targetCount = hasSharerSelection ? Math.max(baseCount - 1, 0) : baseCount;
-
-  const mockParticipants = mockParticipantProfiles.slice(0, targetCount).map((participant, index) => {
-    const quantities: Record<string, number> = {};
-    order.products.forEach((product, productIndex) => {
-      const qty = ((index + 1) * (productIndex + 2)) % 3;
-      quantities[product.id] = qty;
-    });
-    if (order.products.length && Object.values(quantities).every((qty) => qty === 0)) {
-      quantities[order.products[0].id] = 1;
-    }
-    return {
-      ...participant,
-      quantities,
-    };
-  });
-
-  return [...participants, ...mockParticipants];
+const emptyOrderFull: OrderFull = {
+  order: emptyOrder,
+  productsOffered: [],
+  pickupSlots: [],
+  participants: [],
+  items: [],
+  payments: [],
 };
 
 export function OrderClientView({
-  order,
   onClose,
-  onVisibilityChange,
-  onPurchase,
-  initialQuantities,
-  isOwner = true,
+  currentUser,
   onOpenParticipantProfile,
-  isAuthenticated = false,
-  onAutoApproveParticipationRequestsChange,
-  onAllowSharerMessagesChange,
-  onAutoApprovePickupSlotsChange,
+  onStartPayment,
 }: OrderClientViewProps) {
+  const { orderCode } = useParams<{ orderCode: string }>();
+  const [orderFull, setOrderFull] = React.useState<OrderFull | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [isWorking, setIsWorking] = React.useState(false);
   const [quantities, setQuantities] = React.useState<Record<string, number>>({});
   const [participantsVisibility, setParticipantsVisibility] = React.useState<ParticipantVisibility>(
     defaultParticipantVisibility
@@ -215,19 +212,73 @@ export function OrderClientView({
   const participantsPanelRef = React.useRef<HTMLDivElement | null>(null);
   const participantsButtonRef = React.useRef<HTMLButtonElement | null>(null);
 
-  React.useEffect(() => {
-    const next: Record<string, number> = {};
-    order.products.forEach((product) => {
-      const initial = initialQuantities?.[product.id] ?? 0;
-      next[product.id] = Math.max(0, Number(initial) || 0);
-    });
-    setQuantities(next);
-  }, [order.id, order.products, initialQuantities]);
+  const isAuthenticated = Boolean(currentUser);
+
+  const loadOrder = React.useCallback(async () => {
+    if (!orderCode) return;
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const data = await getOrderFullByCode(orderCode);
+      setOrderFull(data);
+      const next: Record<string, number> = {};
+      data.productsOffered.forEach((entry) => {
+        const key = entry.product?.code ?? entry.productId;
+        if (!key) return;
+        next[key] = Math.max(0, Number(next[key]) || 0);
+      });
+      setQuantities(next);
+      setParticipantsVisibility(data.order.participantsVisibility);
+      setParticipantsPanelOpen(false);
+    } catch (error) {
+      console.error('Order load error:', error);
+      setLoadError('Impossible de charger la commande.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [orderCode]);
 
   React.useEffect(() => {
-    setParticipantsVisibility(defaultParticipantVisibility);
-    setParticipantsPanelOpen(false);
-  }, [order.id]);
+    loadOrder();
+  }, [loadOrder]);
+
+  const orderFullValue = orderFull ?? emptyOrderFull;
+  const order = orderFullValue.order;
+  const products = orderFullValue.productsOffered.map((entry) => {
+    const info = entry.product;
+    const productKey = info?.code ?? entry.productId;
+    const measurement: Product['measurement'] =
+      info?.measurement ?? (entry.unitLabel === 'kg' ? 'kg' : 'unit');
+    const unitLabel = entry.unitLabel ?? info?.packaging ?? '';
+    const unitWeightKg = entry.unitWeightKg ?? info?.unitWeightKg ?? null;
+    return {
+      id: productKey,
+      productCode: info?.code ?? productKey,
+      dbId: entry.productId,
+      name: info?.name ?? 'Produit',
+      description: info?.description ?? '',
+      price: centsToEuros(entry.unitFinalPriceCents),
+      unit: unitLabel,
+      quantity: 0,
+      category: '',
+      imageUrl: info?.imageUrl ?? '',
+      producerId: info?.producerProfileId ?? '',
+      producerName: info?.producerName ?? 'Producteur',
+      producerLocation: info?.producerLocation ?? '',
+      inStock: true,
+      measurement,
+      weightKg: unitWeightKg ?? undefined,
+    };
+  });
+  const sharerParticipant = orderFullValue.participants.find((participant) => participant.role === 'sharer');
+  const sharerName = sharerParticipant?.profileName ?? 'Partageur';
+  const isOwner = Boolean(currentUser && currentUser.id === order.sharerProfileId);
+  const myParticipant = currentUser
+    ? orderFullValue.participants.find((participant) => participant.profileId === currentUser.id)
+    : undefined;
+  const updateOrderLocal = (updates: Partial<typeof order>) => {
+    setOrderFull((prev) => (prev ? { ...prev, order: { ...prev.order, ...updates } } : prev));
+  };
 
   React.useEffect(() => {
     if (!participantsPanelOpen) return;
@@ -264,35 +315,70 @@ export function OrderClientView({
   const allowSharerMessages = order.allowSharerMessages ?? true;
   const autoApprovePickupSlots = Boolean(order.autoApprovePickupSlots);
 
+  const shouldShowParticipationRequestButton =
+    !isOwner && !myParticipant && !autoApproveParticipationRequests;
+
   const totalPrice = React.useMemo(
     () =>
-      order.products.reduce((sum, product) => {
+      products.reduce((sum, product) => {
         const qty = quantities[product.id] ?? 0;
         return sum + product.price * qty;
       }, 0),
-    [order.products, quantities]
+    [products, quantities]
   );
 
-  const alreadyOrderedWeight = order.orderedWeight ?? 0;
+  const alreadyOrderedWeight = order.orderedWeightKg ?? 0;
 
   const selectedWeight = React.useMemo(
     () =>
-      order.products.reduce((sum, product) => {
+      products.reduce((sum, product) => {
         const qty = quantities[product.id] ?? 0;
         const weightPerUnit = getProductWeightKg(product);
         return sum + weightPerUnit * qty;
       }, 0),
-    [order.products, quantities]
+    [products, quantities]
   );
 
   const totalWeightTowardsGoal = alreadyOrderedWeight + selectedWeight;
-  const basePercent = order.minWeight > 0 ? (alreadyOrderedWeight / order.minWeight) * 100 : 0;
-  const selectionPercent = order.minWeight > 0 ? (selectedWeight / order.minWeight) * 100 : 0;
+  const basePercent = order.minWeightKg > 0 ? (alreadyOrderedWeight / order.minWeightKg) * 100 : 0;
+  const selectionPercent = order.minWeightKg > 0 ? (selectedWeight / order.minWeightKg) * 100 : 0;
   const progressPercent = basePercent + selectionPercent;
   const cappedBase = Math.min(basePercent, 100);
   const cappedSelection = Math.max(Math.min(basePercent + selectionPercent, 100) - cappedBase, 0);
   const extraPercent = Math.max(0, progressPercent - 100);
-  const remainingWeight = Math.max(order.minWeight - totalWeightTowardsGoal, 0);
+  const remainingWeight = Math.max(order.minWeightKg - totalWeightTowardsGoal, 0);
+  const isMinimumReached = order.minWeightKg <= 0 || alreadyOrderedWeight >= order.minWeightKg;
+  const participantTotalsCents = React.useMemo(
+    () =>
+      orderFullValue.participants.reduce(
+        (sum, participant) => (participant.role === 'participant' ? sum + participant.totalAmountCents : sum),
+        0
+      ),
+    [orderFullValue.participants]
+  );
+  const participantWeightKg = React.useMemo(
+    () =>
+      orderFullValue.participants.reduce(
+        (sum, participant) => (participant.role === 'participant' ? sum + participant.totalWeightKg : sum),
+        0
+      ),
+    [orderFullValue.participants]
+  );
+  const sharerProductsCents = sharerParticipant?.totalAmountCents ?? 0;
+  const sharerPercentage = Math.max(order.sharerPercentage ?? 0, 0);
+  const sharerShareCents = Math.max(0, Math.round(participantTotalsCents * (sharerPercentage / 100)));
+  const sharerDeficitCents = Math.max(0, sharerProductsCents - sharerShareCents);
+  const sharerGainCents = Math.max(0, sharerShareCents - sharerProductsCents);
+  const sharerWeightKg = sharerParticipant?.totalWeightKg ?? 0;
+  const maxWeightKg = typeof order.maxWeightKg === 'number' ? order.maxWeightKg : null;
+  const estimatedParticipantValuePerKg =
+    participantWeightKg > 0 ? participantTotalsCents / participantWeightKg : 0;
+  const maxParticipantWeightKg =
+    maxWeightKg !== null ? Math.max(maxWeightKg - sharerWeightKg, participantWeightKg, 0) : participantWeightKg;
+  const maxParticipantTotalsCents = Math.round(maxParticipantWeightKg * estimatedParticipantValuePerKg);
+  const maxSharerShareCents = Math.round(maxParticipantTotalsCents * (sharerPercentage / 100));
+  const canReachFullCoverage =
+    sharerDeficitCents > 0 && maxWeightKg !== null && maxSharerShareCents >= sharerProductsCents;
 
   const baseSegmentStyle: React.CSSProperties = {
     width: `${cappedBase}%`,
@@ -320,45 +406,225 @@ export function OrderClientView({
   const handleVisibilityToggle = () => {
     if (!isOwner) return;
     const next = order.visibility === 'public' ? 'private' : 'public';
-    onVisibilityChange?.(next);
-    toast.success(`Commande rendue ${next === 'public' ? 'publique' : 'privée'}`);
+    setIsWorking(true);
+    updateOrderVisibility(order.id, next)
+      .then(() => {
+        updateOrderLocal({ visibility: next });
+        toast.success(`Commande rendue ${next === 'public' ? 'publique' : 'privee'}`);
+        if (next === 'public' && participantsVisibility.profile) {
+          const nextVisibility = { ...participantsVisibility, profile: false };
+          setParticipantsVisibility(nextVisibility);
+          updateOrderLocal({ participantsVisibility: nextVisibility });
+          updateParticipantsVisibility(order.id, nextVisibility).catch((error) => {
+            console.error('Participants visibility error:', error);
+            toast.error('Impossible de mettre a jour la visibilite.');
+          });
+        }
+      })
+      .catch((error) => {
+        console.error('Visibility update error:', error);
+        toast.error('Impossible de changer la visibilite.');
+      })
+      .finally(() => setIsWorking(false));
   };
 
   const updateAutoApproveParticipationRequests = (value: boolean) => {
     if (!isOwner || value === autoApproveParticipationRequests) return;
-    onAutoApproveParticipationRequestsChange?.(value);
-    toast.success(
-      value
-        ? 'Les demandes seront validées automatiquement directement.'
-        : 'Les demandes nécessitent désormais une validation manuelle.'
-    );
+    setIsWorking(true);
+    updateOrderParticipantSettings(order.id, { autoApproveParticipationRequests: value })
+      .then(() => {
+        updateOrderLocal({ autoApproveParticipationRequests: value });
+        toast.success(
+          value
+            ? 'Les demandes seront validees automatiquement.'
+            : 'Les demandes necessitent desormais une validation manuelle.'
+        );
+      })
+      .catch((error) => {
+        console.error('Participation settings error:', error);
+        toast.error('Impossible de mettre a jour ce parametre.');
+      })
+      .finally(() => setIsWorking(false));
   };
 
   const updateAllowSharerMessages = (value: boolean) => {
     if (!isOwner || value === allowSharerMessages) return;
-    onAllowSharerMessagesChange?.(value);
-    toast.success(
-      value ? 'Les participants potentiels peuvent vous écrire à nouveau.' : 'Les messages des participants potentiels ont été désactivés.'
-    );
+    setIsWorking(true);
+    updateOrderParticipantSettings(order.id, { allowSharerMessages: value })
+      .then(() => {
+        updateOrderLocal({ allowSharerMessages: value });
+        toast.success(
+          value
+            ? 'Les participants potentiels peuvent vous ecrire a nouveau.'
+            : 'Les messages des participants potentiels ont ete desactives.'
+        );
+      })
+      .catch((error) => {
+        console.error('Sharer messages error:', error);
+        toast.error('Impossible de mettre a jour ce parametre.');
+      })
+      .finally(() => setIsWorking(false));
   };
 
   const updateAutoApprovePickupSlots = (value: boolean) => {
     if (!isOwner || value === autoApprovePickupSlots) return;
-    onAutoApprovePickupSlotsChange?.(value);
-    toast.success(
-      value
-        ? 'Les demandes de rendez-vous pour récupérer les produits seront validés directement.'
-        : 'Les demandes de rendez-vous pour récupérer les produits devront désormais être validés manuellement.'
-    );
+    setIsWorking(true);
+    updateOrderParticipantSettings(order.id, { autoApprovePickupSlots: value })
+      .then(() => {
+        updateOrderLocal({ autoApprovePickupSlots: value });
+        toast.success(
+          value
+            ? 'Les demandes de rendez-vous seront validees automatiquement.'
+            : 'Les demandes de rendez-vous devront etre validees manuellement.'
+        );
+      })
+      .catch((error) => {
+        console.error('Pickup slot settings error:', error);
+        toast.error('Impossible de mettre a jour ce parametre.');
+      })
+      .finally(() => setIsWorking(false));
   };
 
-  const handlePurchase = () => {
+  const handlePurchase = async () => {
     if (totalCards === 0) {
       toast.info('Ajoutez au moins une carte avant de valider.');
       return;
     }
-    const snapshot = { ...quantities };
-    onPurchase?.({ quantities: snapshot, total: totalPrice, weight: selectedWeight });
+    if (onStartPayment) {
+      onStartPayment({
+        quantities: { ...quantities },
+        total: totalPrice,
+        weight: selectedWeight,
+      });
+      return;
+    }
+    if (!isAuthenticated || !currentUser) {
+      toast.info('Connectez-vous pour participer.');
+      return;
+    }
+
+    setIsWorking(true);
+    try {
+      let participant = myParticipant;
+      if (!participant) {
+        if (!autoApproveParticipationRequests) {
+          toast.info('Votre participation doit etre acceptee avant de payer.');
+          return;
+        }
+        const createdParticipant = await requestParticipation(order.orderCode, currentUser.id);
+        const enrichedParticipant = {
+          ...createdParticipant,
+          profileName: currentUser.name ?? null,
+          profileHandle: currentUser.handle ?? null,
+        };
+        participant = enrichedParticipant;
+        setOrderFull((prev) => {
+          if (!prev) return prev;
+          const others = prev.participants.filter((p) => p.profileId !== currentUser.id);
+          return { ...prev, participants: [...others, enrichedParticipant] };
+        });
+      }
+
+      if (!participant) {
+        toast.info('Votre participation doit etre acceptee avant de payer.');
+        return;
+      }
+
+      if (participant.participationStatus !== 'accepted') {
+        toast.info('Votre participation doit etre acceptee avant de payer.');
+        return;
+      }
+
+      for (const product of products) {
+        const qty = quantities[product.id] ?? 0;
+        if (qty <= 0 || !product.dbId) continue;
+        await addItem({
+          orderId: order.id,
+          participantId: participant.id,
+          productId: product.dbId,
+          quantityUnits: qty,
+        });
+      }
+
+      const refreshed = await getOrderFullByCode(order.orderCode);
+      setOrderFull(refreshed);
+      const refreshedParticipant = refreshed.participants.find((p) => p.id === participant.id);
+      if (refreshedParticipant) {
+        await createPaymentStub({
+          orderId: order.id,
+          participantId: refreshedParticipant.id,
+          amountCents: refreshedParticipant.totalAmountCents,
+        });
+      }
+      toast.success('Paiement initie (stub).');
+    } catch (error) {
+      console.error('Purchase error:', error);
+      toast.error('Impossible de finaliser la participation.');
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const handleRequestParticipation = async () => {
+    if (!currentUser) return;
+    setIsWorking(true);
+    try {
+      await requestParticipation(order.orderCode, currentUser.id);
+      await loadOrder();
+      toast.success('Demande de participation envoyee.');
+    } catch (error) {
+      console.error('Participation request error:', error);
+      toast.error('Impossible de demander la participation.');
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const handleApproveParticipant = async (participantId: string) => {
+    setIsWorking(true);
+    try {
+      await approveParticipation(participantId);
+      await loadOrder();
+      toast.success('Participation acceptee.');
+    } catch (error) {
+      console.error('Approve participant error:', error);
+      toast.error('Impossible de valider la participation.');
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const handleRejectParticipant = async (participantId: string) => {
+    setIsWorking(true);
+    try {
+      await rejectParticipation(participantId);
+      await loadOrder();
+      toast.success('Participation refusee.');
+    } catch (error) {
+      console.error('Reject participant error:', error);
+      toast.error('Impossible de refuser la participation.');
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const handlePickupSlotSelect = async (slotId: string) => {
+    if (!myParticipant) return;
+    setIsWorking(true);
+    try {
+      await setParticipantPickupSlot({
+        orderId: order.id,
+        participantId: myParticipant.id,
+        pickupSlotId: slotId,
+      });
+      await loadOrder();
+      toast.success('Creneau enregistre.');
+    } catch (error) {
+      console.error('Pickup slot error:', error);
+      toast.error('Impossible de selectionner ce creneau.');
+    } finally {
+      setIsWorking(false);
+    }
   };
 
   const pickupAddress =
@@ -379,19 +645,27 @@ export function OrderClientView({
     estimatedDeliveryDate && !Number.isNaN(estimatedDeliveryDate.getTime())
       ? estimatedDeliveryDate.toLocaleDateString('fr-FR')
       : null;
-  const pickupSlotsLabel = order.pickupSlots?.length
-    ? order.pickupSlots
-        .map((slot) => {
-          const label = formatPickupSlotLabel(slot);
-          const start = slot.start?.trim();
-          const end = slot.end?.trim();
-          if (start || end) {
-            return `${label} ${start || '??'}-${end || '??'}`.trim();
-          }
-          return label;
-        })
-        .join(' / ')
-    : null;
+  const pickupSlots = React.useMemo(
+    () =>
+      orderFullValue.pickupSlots.map((slot) => {
+        const label = formatPickupSlotLabel({
+          day: slot.day,
+          date: slot.slotDate,
+          label: slot.label,
+        });
+        const start = formatPickupSlotTime(slot.startTime);
+        const end = formatPickupSlotTime(slot.endTime);
+        const timeLabel = start || end ? `${start || '??'} - ${end || '??'}` : 'Horaire a definir';
+        return {
+          id: slot.id,
+          label,
+          timeLabel,
+          enabled: slot.enabled,
+        };
+      }),
+    [orderFullValue.pickupSlots]
+  );
+  const hasPickupSlots = pickupSlots.length > 0;
   const pickupWindowWeeks =
     typeof order.pickupWindowWeeks === 'number' && order.pickupWindowWeeks > 0
       ? order.pickupWindowWeeks
@@ -417,55 +691,74 @@ export function OrderClientView({
       : pickupDurationLabel;
   const pickupLine = deliveryDateLabel
     ? `Livraison estimee : ${deliveryDateLabel}`
-    : pickupSlotsLabel
+    : hasPickupSlots
       ? 'Retrait planifie'
       : order.message || 'Voir message de retrait';
-  const deadlineDate = order.deadline instanceof Date ? order.deadline : new Date(order.deadline);
+  const deadlineDate = order.deadline ?? new Date();
   const now = React.useMemo(() => new Date(), []);
   const daysLeft = Math.max(0, Math.ceil((deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
   const hasPassedDeadline = deadlineDate.getTime() < now.getTime();
   const statusLabel =
     order.status === 'completed'
       ? 'Terminee'
-      : order.status === 'closed' || hasPassedDeadline
+      : order.status !== 'open' || hasPassedDeadline
         ? 'Fermee'
         : 'En cours';
   const statusColor =
     order.status === 'completed'
       ? 'bg-[#DCFCE7] text-[#166534] border-[#BBF7D0]'
-      : order.status === 'closed' || hasPassedDeadline
+      : order.status !== 'open' || hasPassedDeadline
         ? 'bg-[#FEE2E2] text-[#B91C1C] border-[#FECACA]'
         : 'bg-[#E0F2FE] text-[#075985] border-[#BAE6FD]';
-  const participants = React.useMemo(
-    () => buildMockParticipants(order),
-    [order.id, order.participants, order.products]
-  );
-  const participantsWithTotals = React.useMemo(
-    () =>
-      participants.map((participant) => {
-        const totals = order.products.reduce(
-          (acc, product) => {
-            const qty = participant.quantities[product.id] ?? 0;
-            return {
-              amount: acc.amount + product.price * qty,
-              weight: acc.weight + getProductWeightKg(product) * qty,
-            };
-          },
-          { amount: 0, weight: 0 }
-        );
-        return {
-          ...participant,
-          totalAmount: totals.amount,
-          totalWeight: totals.weight,
-        };
-      }),
-    [order.products, participants]
+  const productCodeByDbId = React.useMemo(() => {
+    const entries = orderFullValue.productsOffered.map((entry) => [
+      entry.productId,
+      entry.product?.code ?? entry.productId,
+    ] as const);
+    return new Map(entries);
+  }, [orderFullValue.productsOffered]);
+  const participants = React.useMemo(() => {
+    return orderFullValue.participants.map((participant) => {
+      const quantities: Record<string, number> = {};
+      products.forEach((product) => {
+        quantities[product.id] = 0;
+      });
+      const items = orderFullValue.items.filter((item) => item.participantId === participant.id);
+      items.forEach((item) => {
+        const code = productCodeByDbId.get(item.productId);
+        if (!code) return;
+        quantities[code] = (quantities[code] ?? 0) + item.quantityUnits;
+      });
+      const displayName =
+        participant.role === 'sharer'
+          ? `${participant.profileName ?? 'Partageur'} (partageur)`
+          : participant.profileName ?? 'Participant';
+      return {
+        id: participant.id,
+        name: displayName,
+        handle: participant.profileHandle ?? undefined,
+        avatarUrl: undefined,
+        quantities,
+        totalAmount: centsToEuros(participant.totalAmountCents),
+        totalWeight: participant.totalWeightKg,
+      };
+    });
+  }, [orderFullValue.items, orderFullValue.participants, productCodeByDbId, products]);
+  const participantsWithTotals = participants;
+  const pendingParticipants = orderFullValue.participants.filter(
+    (participant) => participant.participationStatus === 'requested'
   );
   const ownerVisibility: ParticipantVisibility = React.useMemo(
     () => ({ profile: true, content: true, weight: true, amount: true }),
     []
   );
-  const viewerVisibility = isOwner ? ownerVisibility : participantsVisibility;
+  const viewerVisibility = isOwner
+    ? ownerVisibility
+    : {
+        ...order.participantsVisibility,
+        profile: order.visibility === 'public' ? false : order.participantsVisibility.profile,
+      };
+  const isProfileVisibilityLocked = order.visibility === 'public';
   const hasVisibleColumns = Object.values(viewerVisibility).some(Boolean);
   const canShowParticipants = isOwner || (isAuthenticated && hasVisibleColumns);
   const participantsCountLabel = participantsWithTotals.length
@@ -481,7 +774,7 @@ export function OrderClientView({
   );
   const productTotals = React.useMemo(
     () =>
-      order.products.map((product) => {
+      products.map((product) => {
         const totalUnits = participants.reduce(
           (sum, participant) => sum + (participant.quantities[product.id] ?? 0),
           0
@@ -489,7 +782,7 @@ export function OrderClientView({
         const totalWeight = totalUnits * getProductWeightKg(product);
         return { productId: product.id, totalUnits, totalWeight, measurement: product.measurement };
       }),
-    [order.products, participants]
+    [products, participants]
   );
   const shouldShowTotals = viewerVisibility.content || viewerVisibility.weight || viewerVisibility.amount;
   const formatUnitsTotal = (value: number) =>
@@ -500,6 +793,22 @@ export function OrderClientView({
     if (!target) return;
     onOpenParticipantProfile?.(target);
   };
+
+  if (isLoading) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 text-center text-sm text-[#6B7280]">
+        Chargement de la commande...
+      </div>
+    );
+  }
+
+  if (loadError || !orderFull) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 text-center text-sm text-[#6B7280]">
+        {loadError ?? 'Commande introuvable.'}
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 space-y-6 md:space-y-8">
@@ -538,7 +847,9 @@ export function OrderClientView({
                 aria-pressed={autoApproveParticipationRequests}
                 title="Validation directe ou au cas par cas des demandes de participation"
               >
-                <span className="whitespace-nowrap text-[11px]">Validation des participants {autoApproveParticipationRequests ? 'automatique' : 'manuelle'}</span>
+                <span className="block text-[11px] text-center leading-tight break-words max-w-[220px]">
+                  Validation des participants {autoApproveParticipationRequests ? 'automatique' : 'manuelle'}
+                </span>
               </button>
               <button
                 type="button"
@@ -551,7 +862,9 @@ export function OrderClientView({
                 aria-pressed={allowSharerMessages}
                 title="Autoriser ou ne pas autoriser les messages entrants des potentiels participants"
               >
-                <span className="whitespace-nowrap text-[11px]">Messages {allowSharerMessages ? 'acceptés' : 'désactivés'}</span>
+                <span className="block text-[11px] text-center leading-tight break-words max-w-[220px]">
+                  Messages {allowSharerMessages ? 'acceptés' : 'désactivés'}
+                </span>
               </button>
               <button
                 type="button"
@@ -564,7 +877,7 @@ export function OrderClientView({
                 aria-pressed={autoApprovePickupSlots}
                 title="Validation directe ou au cas par cas des demandes de rendez-vous pour la récupération des produits"
               >
-                <span >
+                <span className="block text-[11px] text-center leading-tight break-words max-w-[220px]">
                   Validation des rendez-vous {autoApprovePickupSlots ? 'automatique' : 'manuelle'}
                 </span>
               </button>
@@ -581,8 +894,11 @@ export function OrderClientView({
                 <div className="space-y-2">
                   <h2 className="text-2xl md:text-3xl font-semibold text-[#1F2937] leading-tight">{order.title}</h2>
                   <p className="text-sm text-[#4B5563]">
-                    Par {order.sharerName}
+                    Par {sharerName}
                   </p>
+                  <div className="flex items-center gap-2 text-xs font-semibold">
+                    <span className={`px-2.5 py-1 rounded-full border ${statusColor}`}>{statusLabel}</span>
+                  </div>
                 </div>
               </div>
 
@@ -593,13 +909,13 @@ export function OrderClientView({
                     Capacite
                   </div>
                   <p className="text-[#1F2937] font-semibold text-lg">
-                    {order.minWeight} kg - {order.maxWeight} kg
+                    {order.minWeightKg} kg - {order.maxWeightKg ?? 0} kg
                   </p>
                 </div>
                 <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
                   <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
                     <CalendarClock className="w-4 h-4 text-[#FF6B4A]" />
-                    Cloture
+                    Date de clôture
                   </div>
                   <p className="text-[#1F2937] font-semibold text-lg">
                     {deadlineDate.toLocaleDateString('fr-FR')}
@@ -617,8 +933,28 @@ export function OrderClientView({
                   {pickupWindowLabel && (
                     <p className="text-xs text-[#6B7280]">Duree de recuperation : {pickupWindowLabel}</p>
                   )}
-                  {pickupSlotsLabel && (
-                    <p className="text-xs text-[#6B7280]">Jours possibles : {pickupSlotsLabel}</p>
+                  {hasPickupSlots && (
+                    <div className="order-client-view__pickup-slots">
+                      <div className="order-client-view__pickup-slots-header">
+                        <span className="order-client-view__pickup-slots-title">Creneaux disponibles</span>
+                        <span className="order-client-view__pickup-slots-count">{pickupSlots.length}</span>
+                      </div>
+                      <div className="order-client-view__pickup-slots-grid">
+                        {pickupSlots.map((slot) => (
+                          <div
+                            key={slot.id}
+                            className={`order-client-view__pickup-slot ${
+                              slot.enabled ? '' : 'order-client-view__pickup-slot--disabled'
+                            }`}
+                          >
+                            <div>
+                              <p className="order-client-view__pickup-slot-date">{slot.label}</p>
+                              <p className="order-client-view__pickup-slot-time">{slot.timeLabel}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
                   <p className="text-xs text-[#6B7280]">{pickupAddress}</p>
                 </div>
@@ -643,13 +979,13 @@ export function OrderClientView({
               </div>
             </div>
 
-            {order.products.length === 0 ? (
+            {products.length === 0 ? (
               <div className="bg-white border border-gray-100 rounded-2xl p-6 text-sm text-[#6B7280] shadow-sm">
                 Aucun produit n'est associe a cette commande pour l'instant.
               </div>
             ) : (
               <OrderProductsCarousel
-                products={order.products}
+                products={products}
                 quantities={quantities}
                 onDeltaQuantity={handleQuantityChange}
                 onDirectQuantity={(productId, value) =>
@@ -679,7 +1015,7 @@ export function OrderClientView({
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280] font-medium">
                 <span className="text-[#15803d] font-semibold">Déjà achetés : {alreadyOrderedWeight.toFixed(2)} kg</span>
                 <span className="text-[#d97706] font-semibold">Votre sélection : {selectedWeight.toFixed(2)} kg</span>
-                <span className="text-[#FF6B4A] font-semibold">Objectif : {order.minWeight} kg</span>
+                <span className="text-[#FF6B4A] font-semibold">Objectif : {order.minWeightKg} kg</span>
               </div>
               <div
                 className="relative w-full h-5 rounded-full bg-[#F3F4F6] overflow-hidden border border-[#E5E7EB]"
@@ -709,6 +1045,41 @@ export function OrderClientView({
                 <p className="text-xl font-semibold text-[#1F2937]">{remainingWeight.toFixed(2)} kg</p>
               </div>
             </div>
+            {isOwner && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                  <span className="text-[#6B7280] font-medium">Part du partageur accumulée :</span>
+                  <span className="text-[#1F2937] font-semibold">{formatEurosFromCents(sharerShareCents)}</span>
+                </div>
+                {sharerProductsCents > sharerShareCents ? (
+                  <>
+                    <p className="text-xs text-[#9A3412] bg-[#FFF7ED] border border-[#FFDCC4] rounded-2xl px-3 py-2">
+                      Vous allez devoir compléter {formatEurosFromCents(sharerDeficitCents)} pour clôturer la commande
+                      et obtenir vos produits car votre part gagnée n&apos;est pas suffisante.
+                    </p>
+                    {canReachFullCoverage && (
+                      <p className="text-xs text-[#92400E] bg-[#FFF7ED] border border-[#FFDCC4] rounded-2xl px-3 py-2">
+                        Continuez de partager la commande autour de vous pour obtenir une part suffisante qui vous
+                        permettra de vous faire rembourser l&apos;intégralité des produits.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-[#065F46] bg-[#ECFDF5] border border-[#A7F3D0] rounded-2xl px-3 py-2">
+                    La part du partageur obtenue est supérieure à la valeur de vos produits, ainsi vous allez obtenir
+                    vos produits gratuitement ainsi que {formatEurosFromCents(sharerGainCents)} de gain de coopération.
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="order-client-view__purchase-button order-client-view__close-button"
+                  disabled={!isMinimumReached || isWorking}
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  Clôturer
+                </button>
+              </div>
+            )}
           </div>
 
             <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-4">
@@ -723,12 +1094,27 @@ export function OrderClientView({
                 Poids pris en compte : {totalWeightTowardsGoal.toFixed(2)} kg (dont votre sélection : {selectedWeight.toFixed(2)} kg)
               </p>
             </div>
+            {shouldShowParticipationRequestButton && (
+              <button
+                type="button"
+                onClick={handleRequestParticipation}
+                disabled={isWorking}
+                className="w-full py-2 rounded-xl border border-[#FF6B4A] text-[#FF6B4A] font-semibold hover:bg-[#FFF1E6] transition-colors disabled:opacity-60"
+              >
+                Demander a participer
+              </button>
+            )}
+            {!isOwner && myParticipant?.participationStatus === 'requested' && (
+              <div className="text-xs text-[#6B7280] bg-[#FFF7ED] border border-[#FFDCC4] rounded-xl px-3 py-2">
+                Votre demande est en attente de validation.
+              </div>
+            )}
             <div className="h-px bg-gray-100" />
             <div className="flex flex-wrap items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={handlePurchase}
-                disabled={totalCards === 0}
+                disabled={totalCards === 0 || isWorking}
                 className="order-client-view__purchase-button"
               >
                 <ShoppingCart className="w-4 h-4" />
@@ -761,7 +1147,8 @@ export function OrderClientView({
                   {participantsPanelOpen && (
                     <div ref={participantsPanelRef} className="order-client-view__participants-panel">
                       {participantVisibilityOptions.map((option) => {
-                        const isActive = participantsVisibility[option.key];
+                        const isLocked = isProfileVisibilityLocked && option.key === 'profile';
+                        const isActive = isLocked ? false : participantsVisibility[option.key];
                         return (
                           <div key={option.key} className="order-client-view__participants-panel-row">
                             <span className="order-client-view__participants-panel-label">{option.label}</span>
@@ -771,12 +1158,23 @@ export function OrderClientView({
                                 isActive ? 'order-client-view__participants-panel-toggle--active' : ''
                               }`}
                               aria-pressed={isActive}
-                              onClick={() =>
-                                setParticipantsVisibility((prev) => ({
-                                  ...prev,
-                                  [option.key]: !prev[option.key],
-                                }))
-                              }
+                              disabled={isLocked}
+                              onClick={() => {
+                                if (isLocked) return;
+                                const next = { ...participantsVisibility, [option.key]: !isActive };
+                                if (isProfileVisibilityLocked) {
+                                  next.profile = false;
+                                }
+                                setParticipantsVisibility(next);
+                                setIsWorking(true);
+                                updateParticipantsVisibility(order.id, next)
+                                  .then(() => updateOrderLocal({ participantsVisibility: next }))
+                                  .catch((error) => {
+                                    console.error('Participants visibility error:', error);
+                                    toast.error('Impossible de mettre a jour la visibilite.');
+                                  })
+                                  .finally(() => setIsWorking(false));
+                              }}
                             >
                               {isActive ? 'Visible' : 'Masquée'}
                             </button>
@@ -804,7 +1202,7 @@ export function OrderClientView({
                     <tr>
                       {viewerVisibility.profile && <th>Participant</th>}
                       {viewerVisibility.content &&
-                        order.products.map((product) => (
+                        products.map((product) => (
                           <th key={product.id} style={{ minWidth: 120 }}>
                             <span className="order-client-view__participants-table-product">{product.name}</span>
                             {product.unit && (
@@ -853,7 +1251,7 @@ export function OrderClientView({
                           </td>
                         )}
                         {viewerVisibility.content &&
-                          order.products.map((product) => {
+                          products.map((product) => {
                             const qty = participant.quantities[product.id] ?? 0;
                             return (
                               <td
@@ -886,7 +1284,7 @@ export function OrderClientView({
                           <td className="order-client-view__participants-total-label">Total</td>
                         )}
                         {viewerVisibility.content &&
-                          order.products.map((product, index) => {
+                          products.map((product, index) => {
                             const totals = productTotals[index];
                             const content =
                               totals.measurement === 'kg'
@@ -914,6 +1312,37 @@ export function OrderClientView({
                 </table>
               </div>
             )}
+            {isOwner && pendingParticipants.length > 0 && (
+              <div className="mt-4 rounded-2xl border border-[#FFDCC4] bg-[#FFF7ED] p-4 text-sm space-y-3">
+                <p className="font-semibold text-[#B45309]">Demandes en attente</p>
+                {pendingParticipants.map((participant) => (
+                  <div key={participant.id} className="flex items-center justify-between gap-3">
+                    <span className="text-[#92400E]">
+                      {participant.profileName ?? 'Participant'}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="px-3 py-1 rounded-full bg-white border border-[#FF6B4A] text-[#FF6B4A] text-xs"
+                        onClick={() => handleApproveParticipant(participant.id)}
+                        disabled={isWorking}
+                      >
+                        Accepter
+                      </button>
+                      <button
+                        type="button"
+                        className="px-3 py-1 rounded-full bg-white border border-gray-200 text-[#6B7280] text-xs"
+                        onClick={() => handleRejectParticipant(participant.id)}
+                        disabled={isWorking}
+                      >
+                        Refuser
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
           </div>
     </div>
   );
@@ -925,7 +1354,7 @@ function OrderProductsCarousel({
   onDeltaQuantity,
   onDirectQuantity,
 }: {
-  products: GroupOrder['products'];
+  products: Product[];
   quantities: Record<string, number>;
   onDeltaQuantity: (productId: string, delta: number) => void;
   onDirectQuantity: (productId: string, value: number) => void;
@@ -1085,3 +1514,11 @@ function OrderProductsCarousel({
     </div>
   );
 }
+
+
+
+
+
+
+
+

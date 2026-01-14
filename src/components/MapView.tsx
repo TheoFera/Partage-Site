@@ -168,32 +168,6 @@ export function MapView({
     }
   }, [userAddress, userLocation]);
 
-  React.useEffect(() => {
-    if (resolvedCenter || userLocation || !userAddress) return;
-
-    const controller = new AbortController();
-    const query = encodeURIComponent(userAddress);
-    fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`, {
-      signal: controller.signal,
-      headers: {
-        'Accept-Language': 'fr',
-        'User-Agent': 'cos-diffusion-map-view/1.0',
-      },
-    })
-      .then((res) => res.json())
-      .then((results) => {
-        if (!Array.isArray(results) || !results[0]?.lat || !results[0]?.lon) return;
-        const lat = Number(results[0].lat);
-        const lng = Number(results[0].lon);
-        if (Number.isFinite(lat) && Number.isFinite(lng)) {
-          setResolvedCenter({ lat, lng });
-        }
-      })
-      .catch(() => null);
-
-    return () => controller.abort();
-  }, [mapOrders.length, resolvedCenter, userAddress, userLocation]);
-
   const deckIds = React.useMemo(() => new Set(deck.map((card) => card.id)), [deck]);
   const canSave = userRole !== 'producer';
   const toggleSelection = React.useCallback(

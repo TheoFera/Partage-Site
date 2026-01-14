@@ -504,7 +504,6 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [lotStepDatesByLot, setLotStepDatesByLot] = React.useState<Record<string, Record<string, LotStepDates>>>(
     {}
   );
-  const [stepGeocodes, setStepGeocodes] = React.useState<Record<string, { lat: number; lng: number }>>({});
   const [draggedStepIndex, setDraggedStepIndex] = React.useState<number | null>(null);
   const [dragOverStepIndex, setDragOverStepIndex] = React.useState<number | null>(null);
   const [producerAvatarPath, setProducerAvatarPath] = React.useState<string | null>(null);
@@ -515,7 +514,6 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const journeyMapRef = React.useRef<L.Map | null>(null);
   const journeyMapLayerRef = React.useRef<L.LayerGroup | null>(null);
   const journeyMarkersRef = React.useRef<Map<string, L.Marker>>(new Map());
-  const geocodeCacheRef = React.useRef<Map<string, { lat: number; lng: number }>>(new Map());
   const lotTouchStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const lotPointerDragRef = React.useRef<{ x: number; y: number; id?: number } | null>(null);
   const lotWheelLockRef = React.useRef(false);
@@ -822,8 +820,6 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       ensureTimelineIds(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline)
     );
     setLotStepDatesByLot({});
-    setStepGeocodes({});
-    geocodeCacheRef.current.clear();
     setPendingJourneyImages((current) => {
       Object.values(current).forEach((entry) => {
         if (entry.previewUrl.startsWith('blob:')) {
@@ -885,8 +881,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       .map((step, index) => {
         const key = resolveStepKey(step);
         if (!key) return null;
-        const lat = step.lat ?? stepGeocodes[key]?.lat;
-        const lng = step.lng ?? stepGeocodes[key]?.lng;
+        const lat = step.lat;
+        const lng = step.lng;
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
         return {
           id: key,
@@ -905,66 +901,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       lat: number;
       lng: number;
     }>;
-  }, [journeyStepsForMap, stepGeocodes]);
-
-  React.useEffect(() => {
-    if (!journeyStepsForMap.length) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      const pending = journeyStepsForMap
-        .map((step) => {
-          const key = resolveStepKey(step);
-          if (!key) return null;
-          if (Number.isFinite(step.lat) && Number.isFinite(step.lng)) return null;
-          if (stepGeocodes[key]) return null;
-          const query = buildStepLocationQuery(step);
-          if (!query) return null;
-          return { key, query };
-        })
-        .filter(Boolean) as Array<{ key: string; query: string }>;
-
-      if (!pending.length) return;
-
-      pending.forEach(async ({ key, query }) => {
-        if (geocodeCacheRef.current.has(query)) {
-          const cached = geocodeCacheRef.current.get(query);
-          if (cached) {
-            setStepGeocodes((prev) => ({ ...prev, [key]: cached }));
-          }
-          return;
-        }
-        try {
-          const encoded = encodeURIComponent(query);
-          const response = await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&q=${encoded}&limit=1`,
-            {
-              signal: controller.signal,
-              headers: {
-                'Accept-Language': 'fr',
-                'User-Agent': 'cos-diffusion-product-journey/1.0',
-              },
-            }
-          );
-          if (!response.ok) return;
-          const results = (await response.json()) as Array<{ lat?: string; lon?: string }>;
-          if (!Array.isArray(results) || !results[0]?.lat || !results[0]?.lon) return;
-          const lat = Number(results[0].lat);
-          const lng = Number(results[0].lon);
-          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-          const coords = { lat, lng };
-          geocodeCacheRef.current.set(query, coords);
-          setStepGeocodes((prev) => ({ ...prev, [key]: coords }));
-        } catch {
-          // ignore geocode failures
-        }
-      });
-    }, 500);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [journeyStepsForMap, stepGeocodes]);
+  }, [journeyStepsForMap]);
 
   React.useEffect(() => {
     if (activeTab !== 'circuit') return;
@@ -2712,7 +2649,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
 
   const measurementValue = editMode ? localMeasurement : product.measurement;
   const unitValue = editMode ? localUnit : product.unit;
-  const measurementLabel = measurementValue === 'kg' ? '/ Kg' : '/ unite';
+  const measurementLabel = measurementValue === 'kg' ? '/ Kg' : '/ unité';
   const sanitizedUnitValue = (unitValue || '').trim();
   const unitWeightLabel =
     measurementValue === 'unit' ? formatUnitWeightLabel(product.weightKg) : '';

@@ -468,6 +468,7 @@ export function ProductsLanding({
       const sortedProducts = order.products
         .filter(hasValidLotPrice)
         .sort((a, b) => a.name.localeCompare(b.name));
+      const sharerAvatar = profileMetaById[order.sharerId];
       const locationFallback =
         order.pickupAddress || order.mapLocation?.areaLabel || sortedProducts[0]?.producerLocation || order.producerName;
       const location = formatCityLabel(order.pickupCity, order.pickupPostcode, locationFallback);
@@ -478,7 +479,7 @@ export function ProductsLanding({
         sortedProducts.length > 1 ? `${sortedProducts.length} produits` : '1 produit';
       return {
         id: order.id,
-        orderId: order.id,
+        orderId: order.orderCode ?? order.id,
         title: order.title || order.producerName,
         location: locationWithPostcode,
         tags: [order.sharerName, productCountLabel].filter(Boolean) as string[],
@@ -490,6 +491,8 @@ export function ProductsLanding({
         maxWeight: order.maxWeight,
         orderedWeight: order.orderedWeight,
         deadline: order.deadline,
+        avatarPath: sharerAvatar?.path ?? null,
+        avatarUpdatedAt: sharerAvatar?.updatedAt ?? null,
         avatarUrl: sortedProducts[0]?.imageUrl,
       };
     });
@@ -1126,8 +1129,8 @@ export function ProductGroupContainer({
   const [overlayOpen, setOverlayOpen] = React.useState(false);
   const isOrder = group.variant === 'order';
   const firstProduct = group.products[0];
-  const avatarUrl = isOrder ? group.avatarUrl || firstProduct?.imageUrl : undefined;
-  const hasAvatar = isOrder ? Boolean(avatarUrl) : true;
+  const orderAvatarFallback = group.avatarUrl || firstProduct?.imageUrl || DEFAULT_PROFILE_AVATAR;
+  const hasAvatar = true;
 
   // Index de départ des produits visibles dans le carrousel
   const [startIndex, setStartIndex] = React.useState(0);
@@ -1427,10 +1430,13 @@ export function ProductGroupContainer({
             }}
           >
             {isOrder ? (
-              <ImageWithFallback
-                src={avatarUrl}
+              <Avatar
+                supabaseClient={supabaseClient ?? null}
+                path={group.avatarPath}
+                updatedAt={group.avatarUpdatedAt}
+                fallbackSrc={orderAvatarFallback}
                 alt={group.sharerName || 'Partageur'}
-                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                className="w-full h-full object-cover"
               />
             ) : (
               <Avatar
