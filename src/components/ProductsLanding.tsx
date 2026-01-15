@@ -8,6 +8,7 @@ import { FiltersPopover } from './FiltersPopover';
 import './ProductsLanding.css';
 import { eurosToCents, formatEurosFromCents } from '../lib/money';
 import { formatUnitWeightLabel } from '../lib/weight';
+import { getOrderStatusLabel } from '../lib/orderStatus';
 import {
   Sparkles,
   MapPin,
@@ -59,11 +60,14 @@ export interface ProductGroupDescriptor {
   products: Product[];
   variant: ProductGroupVariant;
   orderId?: string;
+  status?: GroupOrder['status'];
   profileHandle?: string;
   sharerName?: string;
+  sharerPercentage?: number;
   minWeight?: number;
   maxWeight?: number;
   orderedWeight?: number;
+  deliveryFeeCents?: number;
   deadline?: Date;
   avatarUrl?: string;
   avatarPath?: string | null;
@@ -248,6 +252,29 @@ const getProductAttributes = (product: Product) => {
 const hasActiveLot = (product: Product) => Boolean(product.activeLotCode ?? product.activeLotId);
 const hasValidLotPrice = (product: Product) =>
   DEMO_MODE ? Number(product.price) > 0 : hasActiveLot(product) && Number(product.price) > 0;
+
+const resolveOrderEffectiveWeightKg = (orderedWeight: number, minWeight: number, maxWeight?: number) => {
+  const current = Math.max(0, orderedWeight ?? 0);
+  const min = Math.max(0, minWeight ?? 0);
+  if (Number.isFinite(maxWeight) && (maxWeight ?? 0) > 0) {
+    return Math.min(Math.max(current, min), maxWeight ?? 0);
+  }
+  return Math.max(current, min);
+};
+
+const getProductWeightKg = (product: { weightKg?: number; unit?: string; measurement?: 'unit' | 'kg' }) => {
+  if (product.weightKg) return product.weightKg;
+  const unit = product.unit?.toLowerCase() ?? '';
+  const match = unit.match(/([\d.,]+)\s*(kg|g)/);
+  if (match) {
+    const raw = parseFloat(match[1].replace(',', '.'));
+    if (Number.isFinite(raw)) {
+      return match[2] === 'kg' ? raw : raw / 1000;
+    }
+  }
+  if (product.measurement === 'kg') return 1;
+  return 0.25;
+};
 
 export function ProductsLanding({
   products,
@@ -477,24 +504,27 @@ export function ProductsLanding({
         : location;
       const productCountLabel =
         sortedProducts.length > 1 ? `${sortedProducts.length} produits` : '1 produit';
-      return {
-        id: order.id,
-        orderId: order.orderCode ?? order.id,
-        title: order.title || order.producerName,
-        location: locationWithPostcode,
-        tags: [order.sharerName, productCountLabel].filter(Boolean) as string[],
-        products: sortedProducts,
-        variant: 'order',
-        profileHandle: profileMetaById[order.sharerId]?.handle ?? undefined,
-        sharerName: order.sharerName,
-        minWeight: order.minWeight,
-        maxWeight: order.maxWeight,
-        orderedWeight: order.orderedWeight,
-        deadline: order.deadline,
-        avatarPath: sharerAvatar?.path ?? null,
-        avatarUpdatedAt: sharerAvatar?.updatedAt ?? null,
-        avatarUrl: sortedProducts[0]?.imageUrl,
-      };
+        return {
+          id: order.id,
+          orderId: order.orderCode ?? order.id,
+          title: order.title || order.producerName,
+          location: locationWithPostcode,
+          tags: [order.sharerName, productCountLabel].filter(Boolean) as string[],
+          products: sortedProducts,
+          variant: 'order',
+          status: order.status,
+          profileHandle: profileMetaById[order.sharerId]?.handle ?? undefined,
+          sharerName: order.sharerName,
+          sharerPercentage: order.sharerPercentage,
+          minWeight: order.minWeight,
+          maxWeight: order.maxWeight,
+          orderedWeight: order.orderedWeight,
+          deliveryFeeCents: order.deliveryFeeCents,
+          deadline: order.deadline,
+          avatarPath: sharerAvatar?.path ?? null,
+          avatarUpdatedAt: sharerAvatar?.updatedAt ?? null,
+          avatarUrl: sortedProducts[0]?.imageUrl,
+        };
     });
   }, [ordersResults, profileMetaById]);
 
@@ -930,6 +960,7 @@ export function ProductResultCard({
   showSelectionControl,
   compact = false,
   cardWidth = CARD_WIDTH,
+  priceLabelOverride,
 }: {
   product: Product;
   related: Product[];
@@ -944,6 +975,7 @@ export function ProductResultCard({
   showSelectionControl?: boolean;
   compact?: boolean;
   cardWidth?: number;
+  priceLabelOverride?: string;
 }) {
   const [heartPulse, setHeartPulse] = React.useState(false);
   const [selected, setSelected] = React.useState(inDeck);
@@ -952,7 +984,9 @@ export function ProductResultCard({
   }, [inDeck]);
   const measurementLabel = product.measurement === 'kg' ? '/ Kg' : '/ unité';
   const hasPrice = hasValidLotPrice(product);
-  const priceLabel = hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix a venir';
+  const priceLabel =
+    priceLabelOverride ?? (hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix a venir');
+  const canShowPriceDetails = Boolean(priceLabelOverride) || hasPrice;
   const width = cardWidth ?? CARD_WIDTH;
   const cardStyle = {
     width: `${width}px`,
@@ -1075,11 +1109,11 @@ export function ProductResultCard({
           <span className="text-lg font-semibold text-[#FF6B4A]">
             {priceLabel}
           </span>
-            {hasPrice ? (
-              <span className="text-[10px] px-0 py-0.5 text-[#374151] bg-transparent">
-                {measurementInlineLabel}
-              </span>
-            ) : null}
+              {canShowPriceDetails ? (
+                <span className="text-[10px] px-0 py-0.5 text-[#374151] bg-transparent">
+                  {measurementInlineLabel}
+                </span>
+              ) : null}
         </div>
 
         
@@ -1104,6 +1138,7 @@ export function ProductGroupContainer({
   onSelectProducerCategory,
   selected,
   showSelectionControl,
+  orderActionLabel,
 }: {
   group: ProductGroupDescriptor;
   canSave: boolean;
@@ -1120,6 +1155,7 @@ export function ProductGroupContainer({
   selected?: boolean;
   showSelectionControl?: boolean;
   supabaseClient?: SupabaseClient | null;
+  orderActionLabel?: string;
 }) {
   const navigate = useNavigate();
   const useCarousel = group.products.length > MAX_VISIBLE_CARDS;
@@ -1129,8 +1165,9 @@ export function ProductGroupContainer({
   const [overlayOpen, setOverlayOpen] = React.useState(false);
   const isOrder = group.variant === 'order';
   const firstProduct = group.products[0];
-  const orderAvatarFallback = group.avatarUrl || firstProduct?.imageUrl || DEFAULT_PROFILE_AVATAR;
+  const orderAvatarFallback = DEFAULT_PROFILE_AVATAR;
   const hasAvatar = true;
+  const orderActionText = orderActionLabel ?? 'Participer';
 
   // Index de départ des produits visibles dans le carrousel
   const [startIndex, setStartIndex] = React.useState(0);
@@ -1172,6 +1209,42 @@ export function ProductGroupContainer({
     ? group.products.slice(startIndex, startIndex + MAX_VISIBLE_CARDS)
     : group.products;
 
+  const orderPriceLabels = React.useMemo(() => {
+    if (!isOrder) return null;
+    const effectiveWeightKg = resolveOrderEffectiveWeightKg(
+      group.orderedWeight ?? 0,
+      group.minWeight ?? 0,
+      group.maxWeight
+    );
+    const deliveryFeeCents = Number.isFinite(group.deliveryFeeCents ?? NaN) ? group.deliveryFeeCents ?? 0 : 0;
+    const feePerKg = effectiveWeightKg > 0 ? deliveryFeeCents / effectiveWeightKg : 0;
+    const sharerPercentage = group.sharerPercentage ?? 0;
+    const shareFraction =
+      sharerPercentage > 0 && sharerPercentage < 100
+        ? sharerPercentage / (100 - sharerPercentage)
+        : 0;
+    const labels: Record<string, string> = {};
+    group.products.forEach((product) => {
+      if (!hasValidLotPrice(product)) return;
+      const unitWeightKg = getProductWeightKg(product);
+      const basePriceCents = eurosToCents(product.price);
+      const unitDeliveryCents = Math.round(feePerKg * unitWeightKg);
+      const basePlusDelivery = basePriceCents + unitDeliveryCents;
+      const unitSharerFeeCents = Math.round(basePlusDelivery * shareFraction);
+      const unitFinalPriceCents = basePlusDelivery + unitSharerFeeCents;
+      labels[product.id] = formatEurosFromCents(unitFinalPriceCents);
+    });
+    return labels;
+  }, [
+    group.deliveryFeeCents,
+    group.maxWeight,
+    group.minWeight,
+    group.orderedWeight,
+    group.products,
+    group.sharerPercentage,
+    isOrder,
+  ]);
+
   const goLeft = () => {
     if (!canScrollLeft) return;
     setStartIndex((prev) => Math.max(prev - 1, 0));
@@ -1191,6 +1264,9 @@ export function ProductGroupContainer({
     const percentLabel = `${Math.round(ratio * 100)}%`;
     return { ratio, label: percentLabel };
   }, [group.maxWeight, group.minWeight, group.orderedWeight, group.variant]);
+  const orderStatusLabel =
+    isOrder && group.status ? getOrderStatusLabel(group.status) : '';
+  const showOrderStage = isOrder && group.status && group.status !== 'open';
 
   const availabilityProgress = React.useMemo(() => {
     if (group.variant !== 'producer') return null;
@@ -1478,7 +1554,11 @@ export function ProductGroupContainer({
                     Clôture : {deadlineLabel}
                   </p>
                 ) : null}
-                {orderProgress ? (
+                {showOrderStage && orderStatusLabel ? (
+                  <p style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
+                    Etape : {orderStatusLabel}
+                  </p>
+                ) : orderProgress ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
                     <div
                       style={{
@@ -1605,7 +1685,7 @@ export function ProductGroupContainer({
                 }}
               >
                 <ShoppingCart className="w-4 h-4"/>
-                <span>Participer</span>
+                <span>{orderActionText}</span>
               </button>
             )}
           </div>
@@ -1657,20 +1737,21 @@ export function ProductGroupContainer({
                     flex: `0 0 ${CARD_WIDTH}px`,
                   }}
                 >
-              <ProductResultCard
-                product={product}
-                related={[]}
-                canSave={canSave}
-                inDeck={deckIds.has(product.id)}
-                onSave={onSave}
-                onRemove={onRemoveFromDeck}
-                onToggleSelection={onToggleSelection}
-                onOpenProducer={onOpenProducer}
-                onOpen={onOpenProduct}
-                showSelectionControl={showSelectionControl}
-                compact
-                cardWidth={CARD_WIDTH}
-              />
+                <ProductResultCard
+                  product={product}
+                  related={[]}
+                  canSave={canSave}
+                  inDeck={deckIds.has(product.id)}
+                  onSave={onSave}
+                  onRemove={onRemoveFromDeck}
+                  onToggleSelection={onToggleSelection}
+                  onOpenProducer={onOpenProducer}
+                  onOpen={onOpenProduct}
+                  showSelectionControl={showSelectionControl}
+                  compact
+                  cardWidth={CARD_WIDTH}
+                  priceLabelOverride={orderPriceLabels?.[product.id]}
+                />
             </div>
               ))}
             </div>
@@ -1741,23 +1822,24 @@ export function ProductGroupContainer({
             className="flex flex-wrap gap-2 sm:gap-3 pb-1 w-full justify-center"
             style={{ alignItems: 'stretch' }}
           >
-            {group.products.map((product) => (
-              <ProductResultCard
-                key={product.id}
-                product={product}
-                related={[]}
-                canSave={canSave}
-                inDeck={deckIds.has(product.id)}
-                onSave={onSave}
-                onRemove={onRemoveFromDeck}
-                onToggleSelection={onToggleSelection}
-                onOpenProducer={onOpenProducer}
-                onOpen={onOpenProduct}
-                showSelectionControl={showSelectionControl}
-                compact
-                cardWidth={CARD_WIDTH}
-              />
-            ))}
+              {group.products.map((product) => (
+                <ProductResultCard
+                  key={product.id}
+                  product={product}
+                  related={[]}
+                  canSave={canSave}
+                  inDeck={deckIds.has(product.id)}
+                  onSave={onSave}
+                  onRemove={onRemoveFromDeck}
+                  onToggleSelection={onToggleSelection}
+                  onOpenProducer={onOpenProducer}
+                  onOpen={onOpenProduct}
+                  showSelectionControl={showSelectionControl}
+                  compact
+                  cardWidth={CARD_WIDTH}
+                  priceLabelOverride={orderPriceLabels?.[product.id]}
+                />
+              ))}
           </div>
         )}
       </div>

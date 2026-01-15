@@ -68,6 +68,100 @@ const deliveryDayLabels: Record<DeliveryDay, string> = {
   sunday: 'Dimanche',
 };
 
+type OpeningHourSlot = { start: string; end: string };
+
+const normalizeOpeningHoursDayKey = (day: string): DeliveryDay | null => {
+  const normalized = day.trim().toLowerCase();
+  if (!normalized) return null;
+  if (Object.prototype.hasOwnProperty.call(deliveryDayLabels, normalized)) {
+    return normalized as DeliveryDay;
+  }
+  const match = (Object.entries(deliveryDayLabels) as Array<[DeliveryDay, string]>).find(
+    ([, label]) => label.toLowerCase() === normalized
+  );
+  return match ? match[0] : null;
+};
+
+const parseTimeSegment = (segment?: string) => {
+  if (!segment) return '';
+  const trimmed = segment.trim();
+  if (!trimmed) return '';
+  const match = trimmed.match(/(\d{1,2})(?:(?:[:hH])(\d{1,2}))?/);
+  if (!match) return '';
+  const hours = Number(match[1]);
+  const minutes = match[2] ? Number(match[2]) : 0;
+  if (!Number.isFinite(hours) || hours < 0 || hours > 23) return '';
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes > 59) return '';
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+};
+
+const parseOpeningHoursEntry = (value?: string): OpeningHourSlot => {
+  if (!value) return { start: '', end: '' };
+  const [startSegment, endSegment] = value.split('-');
+  return {
+    start: parseTimeSegment(startSegment),
+    end: parseTimeSegment(endSegment),
+  };
+};
+
+const buildOpeningHoursByDay = (openingHours?: Record<string, string>) => {
+  const result: Partial<Record<DeliveryDay, OpeningHourSlot>> = {};
+  if (!openingHours) return result;
+  Object.entries(openingHours).forEach(([day, value]) => {
+    const normalizedDay = normalizeOpeningHoursDayKey(day);
+    if (!normalizedDay) return;
+    const parsed = parseOpeningHoursEntry(value);
+    if (!parsed.start && !parsed.end) return;
+    result[normalizedDay] = parsed;
+  });
+  return result;
+};
+
+const buildPickupSlotsFromOpeningHours = (openingHours?: Record<string, string>) => {
+  const openingByDay = buildOpeningHoursByDay(openingHours);
+  const hasOpeningHours = Object.keys(openingByDay).length > 0;
+  return defaultSlots.map((slot) => {
+    if (!slot.day) return slot;
+    if (!hasOpeningHours) {
+      return { ...slot, enabled: false };
+    }
+    const openingSlot = openingByDay[slot.day as DeliveryDay];
+    if (!openingSlot) {
+      return { ...slot, enabled: false };
+    }
+    return {
+      ...slot,
+      enabled: true,
+      start: openingSlot.start,
+      end: openingSlot.end,
+    };
+  });
+};
+
+const hasActiveLot = (product: DeckCard) => Boolean(product.activeLotCode ?? product.activeLotId);
+const hasValidLotPrice = (product: DeckCard) =>
+  DEMO_MODE ? Number(product.price) > 0 : hasActiveLot(product) && Number(product.price) > 0;
+
+const deliveryDayIndexMap: Record<DeliveryDay, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+const deliveryDayIndexToKey: Record<number, DeliveryDay> = {
+  0: 'sunday',
+  1: 'monday',
+  2: 'tuesday',
+  3: 'wednesday',
+  4: 'thursday',
+  5: 'friday',
+  6: 'saturday',
+};
+
 const DELIVERY_GEOCODE_CACHE_KEY = 'delivery-geocode-cache';
 const DELIVERY_GEOCODE_CACHE_LIMIT = 50;
 const DELIVERY_GEOCODE_DEBOUNCE_MS = 650;
@@ -114,7 +208,7 @@ export function CreateOrderForm({
   const [selectedProducts, setSelectedProducts] = React.useState<string[]>(preselectedProductIds ?? []);
   const [title, setTitle] = React.useState('');
   const [visibility, setVisibility] = React.useState<'public' | 'private'>('public');
-  const [sharerPercentage, setSharerPercentage] = React.useState(8);
+  const [sharerPercentage, setSharerPercentage] = React.useState(5);
   const [autoApproveParticipationRequests, setAutoApproveParticipationRequests] = React.useState(true);
   const [allowSharerMessages, setAllowSharerMessages] = React.useState(true);
   const [autoApprovePickupSlots, setAutoApprovePickupSlots] = React.useState(true);
@@ -137,13 +231,17 @@ export function CreateOrderForm({
   const [pickupInfo, setPickupInfo] = React.useState('');
   const [pickupCity, setPickupCity] = React.useState('');
   const [pickupPostcode, setPickupPostcode] = React.useState('');
-  const [pickupSlots, setPickupSlots] = React.useState<PickupSlot[]>(defaultSlots);
+  const [pickupSlots, setPickupSlots] = React.useState<PickupSlot[]>(() =>
+    buildPickupSlotsFromOpeningHours(user?.openingHours)
+  );
   const [pickupWindowWeeks, setPickupWindowWeeks] = React.useState(2);
   const [pickupDateSlots, setPickupDateSlots] = React.useState<PickupSlot[]>([]);
   const [deliveryGeoStatus, setDeliveryGeoStatus] = React.useState<'idle' | 'loading' | 'resolved' | 'error'>('idle');
   const [deliveryGeoCoords, setDeliveryGeoCoords] = React.useState<GeoPoint | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const geocodeCacheRef = React.useRef<Map<string, GeoPoint>>(new Map());
+  const pickupSlotsTouchedRef = React.useRef(false);
+  const pickupDateSlotsTouchedRef = React.useRef(false);
 
   const producerLegal = producer?.legalEntity;
   const deliveryOptionConfig = React.useMemo(
@@ -179,6 +277,10 @@ export function CreateOrderForm({
       .filter(Boolean);
     return parts.join(', ');
   }, [deliveryCity, deliveryInfo, deliveryPostcode, deliveryStreet]);
+  const openingHoursByDay = React.useMemo(
+    () => buildOpeningHoursByDay(user?.openingHours),
+    [user?.openingHours]
+  );
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -236,6 +338,12 @@ export function CreateOrderForm({
       return next ? next : prev;
     });
   }, [user]);
+
+  React.useEffect(() => {
+    if (!user) return;
+    if (pickupSlotsTouchedRef.current) return;
+    setPickupSlots(buildPickupSlotsFromOpeningHours(user.openingHours));
+  }, [user?.id, user?.openingHours]);
 
   const deliveryProfileCoords = React.useMemo(() => {
     const lat = user?.addressLat;
@@ -395,21 +503,12 @@ export function CreateOrderForm({
     if (!days || days.length === 0) return 'Jours à définir';
     return days.map((day) => deliveryDayLabels[day]).join(', ');
   };
-  const dayIndexMap: Record<DeliveryDay, number> = {
-    sunday: 0,
-    monday: 1,
-    tuesday: 2,
-    wednesday: 3,
-    thursday: 4,
-    friday: 5,
-    saturday: 6,
-  };
   const getNextDateForDays = (baseDate: Date, days?: DeliveryDay[]) => {
     if (!days || days.length === 0) return null;
     const current = baseDate.getDay();
     let minDelta: number | null = null;
     Array.from(new Set(days)).forEach((day) => {
-      const target = dayIndexMap[day];
+      const target = deliveryDayIndexMap[day];
       let delta = (target - current + 7) % 7;
       if (delta === 0) delta = 7;
       if (minDelta === null || delta < minDelta) minDelta = delta;
@@ -449,38 +548,52 @@ export function CreateOrderForm({
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
   }, []);
-  const buildPickupDateSlots = React.useCallback((start: Date, end: Date, previous: PickupSlot[]) => {
-    const next: PickupSlot[] = [];
-    const previousByDate = new Map<string, PickupSlot>();
-    previous.forEach((slot) => {
-      if (slot.date) previousByDate.set(slot.date, slot);
-    });
-    const current = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-    const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-    while (current <= last) {
-      const key = toDateKey(current);
-      const existing = previousByDate.get(key);
-      next.push({
-        date: key,
-        label: current.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: '2-digit' }),
-        enabled: existing?.enabled ?? false,
-        start: existing?.start ?? '17:00',
-        end: existing?.end ?? '19:00',
+  const getOpeningSlotForDate = React.useCallback(
+    (date: Date) => {
+      const dayKey = deliveryDayIndexToKey[date.getDay()];
+      return dayKey ? openingHoursByDay[dayKey] : undefined;
+    },
+    [openingHoursByDay]
+  );
+  const buildPickupDateSlots = React.useCallback(
+    (start: Date, end: Date, previous: PickupSlot[]) => {
+      const next: PickupSlot[] = [];
+      const previousByDate = new Map<string, PickupSlot>();
+      previous.forEach((slot) => {
+        if (slot.date) previousByDate.set(slot.date, slot);
       });
-      current.setDate(current.getDate() + 1);
-    }
-    return next;
-  }, [toDateKey]);  const shareTotalValue = selectedProductsData.reduce((sum, p) => {
-    const qty = shareQuantities[p.id] ?? 0;
-    return sum + p.price * qty;
-  }, 0);
-  const shareTotalUnits = selectedProductsData.reduce((sum, p) => sum + (shareQuantities[p.id] ?? 0), 0);
+      const current = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+      const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+      while (current <= last) {
+        const key = toDateKey(current);
+        const existing = previousByDate.get(key);
+        const openingSlot = getOpeningSlotForDate(current);
+        const defaultEnabled = Boolean(openingSlot);
+        const defaultStart = openingSlot ? openingSlot.start : '17:00';
+        const defaultEnd = openingSlot ? openingSlot.end : '19:00';
+        const shouldKeepExisting = pickupDateSlotsTouchedRef.current && existing;
+        next.push({
+          date: key,
+          label: current.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: '2-digit' }),
+          enabled: shouldKeepExisting ? existing.enabled : defaultEnabled,
+          start: shouldKeepExisting ? existing.start : defaultStart,
+          end: shouldKeepExisting ? existing.end : defaultEnd,
+        });
+        current.setDate(current.getDate() + 1);
+      }
+      return next;
+    },
+    [getOpeningSlotForDate, toDateKey]
+  );
+
   const totalWeightProducts = selectedProductsData.reduce((sum, p) => sum + (p.weightKg ?? 1), 0);
   const safeMinWeight = Math.max(0, normalizedMinWeight);
-  const effectiveWeight = Math.max(totalWeightProducts, safeMinWeight);
   const safeMaxWeight = Math.max(0, normalizedMaxWeight);
-  const completeWeight =
-    safeMaxWeight > 0 ? Math.max(safeMaxWeight, totalWeightProducts, safeMinWeight) : effectiveWeight;
+  const effectiveWeight =
+    safeMaxWeight > 0
+      ? Math.min(Math.max(totalWeightProducts, safeMinWeight), safeMaxWeight)
+      : Math.max(totalWeightProducts, safeMinWeight);
+  const completeWeight = safeMaxWeight > 0 ? safeMaxWeight : effectiveWeight;
   const pricePerKgCandidates = selectedProductsData
     .map((p) => {
       if (p.measurement === 'kg') return p.price;
@@ -511,6 +624,10 @@ export function CreateOrderForm({
   const logTotal = effectiveWeight > 0 ? resolveDeliveryFee(effectiveWeight) : 0;
   const logPerKg = effectiveWeight > 0 ? logTotal / effectiveWeight : 0;
   const logPerKgComplete = completeWeight > 0 ? resolveDeliveryFee(completeWeight) / completeWeight : 0;
+  const minShareWeight = safeMinWeight > 0 ? safeMinWeight : effectiveWeight;
+  const maxShareWeight = safeMaxWeight > 0 ? safeMaxWeight : completeWeight;
+  const logPerKgAtMin = minShareWeight > 0 ? resolveDeliveryFee(minShareWeight) / minShareWeight : 0;
+  const logPerKgAtMax = maxShareWeight > 0 ? resolveDeliveryFee(maxShareWeight) / maxShareWeight : 0;
   const estimatedDeliveryDate = React.useMemo(() => {
     if (!deadline) return null;
     const baseDate = new Date(deadline);
@@ -564,11 +681,15 @@ export function CreateOrderForm({
   const pickupWindowEnd = pickupWindowRange?.end.getTime() ?? null;
 
   const perProductRows = selectedProductsData.map((p) => {
+    const hasPrice = hasValidLotPrice(p);
     const weight = p.weightKg ?? 1;
     const logPerUnit = logPerKg * weight;
     const basePlusLog = p.price + logPerUnit;
     const participantPrice = basePlusLog * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
     const sharePerUnit = participantPrice - basePlusLog;
+    const logPerUnitAtMin = logPerKgAtMin * weight;
+    const basePlusLogAtMin = p.price + logPerUnitAtMin;
+    const participantPriceAtMin = basePlusLogAtMin * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
     const logPerUnitComplete = logPerKgComplete * weight;
     const basePlusLogComplete = p.price + logPerUnitComplete;
     const participantPriceComplete =
@@ -582,19 +703,28 @@ export function CreateOrderForm({
       logPerUnit,
       sharePerUnit,
       participantPrice,
+      participantPriceAtMin,
       participantPriceComplete,
       priceType,
+      hasPrice,
     };
   });
+
+  const sharePriceLabels = perProductRows.reduce((acc, row) => {
+    if (!row.hasPrice) return acc;
+    acc[row.id] = formatEurosFromCents(eurosToCents(row.participantPriceAtMin));
+    return acc;
+  }, {} as Record<string, string>);
+  const shareTotalValue = perProductRows.reduce((sum, row) => {
+    const qty = shareQuantities[row.id] ?? 0;
+    return sum + row.participantPriceAtMin * qty;
+  }, 0);
+  const shareTotalLabel = formatEurosFromCents(eurosToCents(shareTotalValue));
 
   const totalShareBase = perProductRows.reduce((sum, r) => sum + r.sharePerUnit, 0);
   const weightScale = totalWeightProducts > 0 ? effectiveWeight / totalWeightProducts : 1;
   const totalShareEffective = totalShareBase * weightScale;
   const shareMultiplier = shareFraction > 0 ? shareFraction / (1 - shareFraction) : 0;
-  const minShareWeight = safeMinWeight > 0 ? safeMinWeight : effectiveWeight;
-  const maxShareWeight = safeMaxWeight > 0 ? safeMaxWeight : completeWeight;
-  const logPerKgAtMin = minShareWeight > 0 ? resolveDeliveryFee(minShareWeight) / minShareWeight : 0;
-  const logPerKgAtMax = maxShareWeight > 0 ? resolveDeliveryFee(maxShareWeight) / maxShareWeight : 0;
   const minShareAtThreshold =
     minShareWeight > 0 ? (minPricePerKg + logPerKgAtMin) * shareMultiplier * minShareWeight : 0;
   const maxShareAtThreshold =
@@ -627,13 +757,13 @@ export function CreateOrderForm({
       render: (row: (typeof perProductRows)[number]) =>
         formatEurosFromCents(eurosToCents(row.sharePerUnit)),
     },
-    {
-      key: 'participantPrice',
-      label: 'Prix final au poids minimum',
-      className: 'is-right',
-      render: (row: (typeof perProductRows)[number]) =>
-        formatEurosFromCents(eurosToCents(row.participantPrice)),
-    },
+      {
+        key: 'participantPrice',
+        label: 'Prix final au poids minimum',
+        className: 'is-right',
+        render: (row: (typeof perProductRows)[number]) =>
+          formatEurosFromCents(eurosToCents(row.participantPriceAtMin)),
+      },
     {
       key: 'participantPriceComplete',
       label: 'Prix final au poids maximum',
@@ -825,20 +955,24 @@ export function CreateOrderForm({
   }, [buildPickupDateSlots, pickupWindowEnd, pickupWindowStart, visibility]);
 
   const toggleSlot = (day: string) => {
+    pickupSlotsTouchedRef.current = true;
     setPickupSlots((prev) => prev.map((slot) => (slot.day === day ? { ...slot, enabled: !slot.enabled } : slot)));
   };
 
   const updateSlotTime = (day: string, key: 'start' | 'end', value: string) => {
+    pickupSlotsTouchedRef.current = true;
     setPickupSlots((prev) => prev.map((slot) => (slot.day === day ? { ...slot, [key]: value } : slot)));
   };
 
   const toggleDateSlot = (date: string) => {
+    pickupDateSlotsTouchedRef.current = true;
     setPickupDateSlots((prev) =>
       prev.map((slot) => (slot.date === date ? { ...slot, enabled: !slot.enabled } : slot))
     );
   };
 
   const updateDateSlotTime = (date: string, key: 'start' | 'end', value: string) => {
+    pickupDateSlotsTouchedRef.current = true;
     setPickupDateSlots((prev) =>
       prev.map((slot) => (slot.date === date ? { ...slot, [key]: value } : slot))
     );
@@ -900,6 +1034,7 @@ export function CreateOrderForm({
       products: selectedProductsData,
       title,
       visibility,
+      status: 'open',
       deadline: deadline ? new Date(deadline) : null,
       message,
       autoApproveParticipationRequests,
@@ -1429,20 +1564,23 @@ export function CreateOrderForm({
                     quantities={shareQuantities}
                     onDeltaQuantity={handleShareQuantityChange}
                     onDirectQuantity={handleShareDirectQuantity}
+                    priceLabels={sharePriceLabels}
                   />
                 )}
 
-                <div className="bg-[#F9FAFB] rounded-lg border border-gray-200 p-3 text-sm text-[#1F2937] space-y-1">
-                  <p>
-                    Valeur estimée : <span className="font-semibold">{shareTotalValue.toFixed(2)} €</span>
-                  </p>
+                  <div className="bg-[#F9FAFB] rounded-lg border border-gray-200 p-3 text-sm text-[#1F2937] space-y-1">
+                    <p>
+                      Valeur estimée : <span className="font-semibold">{shareTotalLabel}</span>
+                    </p>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              
               <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Part partageur (%)</label>
+                <label className="block text-sm text-[#6B7280] mb-2">Définissez votre part partageur (%)</label>
                 <div className="relative">
                   <Percent className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
                   <input
@@ -1457,7 +1595,7 @@ export function CreateOrderForm({
                 </div>
               </div>
               <div className="bg-[#F9FAFB] rounded-lg border border-gray-200 p-3 text-sm text-[#1F2937] space-y-1">
-                <p className="font-semibold">Part du partageur :</p>
+                <p className="font-semibold">Part partageur selon le niveau de participation :</p>
                 <p className="text-[#6B7280]">
                   au poids minimum de la commande : <span className="text-[#1F2937] font-semibold">{minShareAtThreshold.toFixed(2)} €</span>
                 </p>
@@ -1466,6 +1604,9 @@ export function CreateOrderForm({
                 </p>
               </div>
             </div>
+          <p className="text-sm text-[#6B7280]">La part partageur que vous recevrez vous permettra d'obtenir les produits gratuitement si sa valeur est supérieure ou égale à la valeur des produits que vous avez sélectionnés ci-dessus.
+            Si votre part partageur au moment de la clôture est inférieure à la valeur des produits vous devrez compléter le montant en réalisant un paiement bancaire. 
+            Si votre part est supérieure au montant des produits que vous avez commandés, le surplus monétaire obtenu sera utilisable lui aussi sur la plateforme.</p>
           </div>
 
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
@@ -1516,7 +1657,7 @@ export function CreateOrderForm({
                       className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="sm:col-span-2">
                       <input
                         type="text"
@@ -1848,11 +1989,13 @@ function ShareProductsCarousel({
   quantities,
   onDeltaQuantity,
   onDirectQuantity,
+  priceLabels,
 }: {
   products: DeckCard[];
   quantities: Record<string, number>;
   onDeltaQuantity: (productId: string, delta: number) => void;
   onDirectQuantity: (productId: string, value: number) => void;
+  priceLabels?: Record<string, string>;
 }) {
   const [startIndex, setStartIndex] = React.useState(0);
   const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
@@ -1945,6 +2088,7 @@ function ShareProductsCarousel({
                 showSelectionControl={false}
                 cardWidth={CARD_WIDTH}
                 compact
+                priceLabelOverride={priceLabels?.[product.id]}
               />
               <div className="w-full space-y-2" style={{ maxWidth: CARD_WIDTH }}>
                 <p className="text-[12px] text-[#6B7280] text-center">{getProductWeightKg(product).toFixed(2)} kg</p>

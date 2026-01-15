@@ -1,5 +1,5 @@
 import React from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   CalendarClock,
@@ -16,12 +16,15 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import type { User, Product } from '../types';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { ProductResultCard } from './ProductsLanding';
+import { Avatar } from './Avatar';
 import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
 import { toast } from 'sonner';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import './OrderClientView.css';
 import { eurosToCents, formatEurosFromCents } from '../lib/money';
+import { getOrderStatusLabel } from '../lib/orderStatus';
 import {
   addItem,
   approveParticipation,
@@ -32,6 +35,7 @@ import {
   setParticipantPickupSlot,
   updateParticipantsVisibility,
   updateOrderParticipantSettings,
+  updateOrderStatus,
   updateOrderVisibility,
 } from '../services/orders';
 import { centsToEuros, type OrderFull } from '../types/orders';
@@ -41,6 +45,7 @@ interface OrderClientViewProps {
   currentUser?: User | null;
   onOpenParticipantProfile?: (participantName: string) => void;
   onStartPayment?: (payload: { quantities: Record<string, number>; total: number; weight: number }) => void;
+  supabaseClient?: SupabaseClient | null;
 }
 
 function formatPrice(value: number) {
@@ -102,6 +107,29 @@ function getProductWeightKg(product: { weightKg?: number; unit?: string; measure
   return 0.25;
 }
 
+const DEFAULT_PROFILE_AVATAR =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
+      <circle cx="80" cy="80" r="80" fill="#E5E7EB" />
+      <circle cx="80" cy="64" r="30" fill="#9CA3AF" />
+      <ellipse cx="80" cy="118" rx="42" ry="32" fill="#6B7280" />
+    </svg>`
+  );
+
+const resolveOrderEffectiveWeightKg = (
+  orderedWeightKg: number,
+  minWeightKg: number,
+  maxWeightKg: number | null
+) => {
+  const current = Math.max(0, orderedWeightKg ?? 0);
+  const min = Math.max(0, minWeightKg ?? 0);
+  if (typeof maxWeightKg === 'number' && maxWeightKg > 0) {
+    return Math.min(Math.max(current, min), maxWeightKg);
+  }
+  return Math.max(current, min);
+};
+
 const ORDER_CARD_WIDTH = CARD_WIDTH;
 
 type ParticipantVisibility = {
@@ -117,6 +145,9 @@ type OrderParticipant = {
   handle?: string;
   avatarUrl?: string;
   quantities: Record<string, number>;
+  totalWeight: number;
+  totalAmount: number;
+  pickupCode: string | null;
 };
 
 const defaultParticipantVisibility: ParticipantVisibility = {
@@ -191,6 +222,7 @@ const emptyOrderFull: OrderFull = {
   participants: [],
   items: [],
   payments: [],
+  profiles: {},
 };
 
 export function OrderClientView({
@@ -198,7 +230,9 @@ export function OrderClientView({
   currentUser,
   onOpenParticipantProfile,
   onStartPayment,
+  supabaseClient,
 }: OrderClientViewProps) {
+  const navigate = useNavigate();
   const { orderCode } = useParams<{ orderCode: string }>();
   const [orderFull, setOrderFull] = React.useState<OrderFull | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -251,13 +285,15 @@ export function OrderClientView({
       info?.measurement ?? (entry.unitLabel === 'kg' ? 'kg' : 'unit');
     const unitLabel = entry.unitLabel ?? info?.packaging ?? '';
     const unitWeightKg = entry.unitWeightKg ?? info?.unitWeightKg ?? null;
+    const unitBasePriceCents =
+      Number.isFinite(entry.unitBasePriceCents ?? NaN) ? entry.unitBasePriceCents : entry.unitFinalPriceCents;
     return {
       id: productKey,
       productCode: info?.code ?? productKey,
       dbId: entry.productId,
       name: info?.name ?? 'Produit',
       description: info?.description ?? '',
-      price: centsToEuros(entry.unitFinalPriceCents),
+      price: centsToEuros(unitBasePriceCents),
       unit: unitLabel,
       quantity: 0,
       category: '',
@@ -272,10 +308,41 @@ export function OrderClientView({
   });
   const sharerParticipant = orderFullValue.participants.find((participant) => participant.role === 'sharer');
   const sharerName = sharerParticipant?.profileName ?? 'Partageur';
-  const isOwner = Boolean(currentUser && currentUser.id === order.sharerProfileId);
+  const isOwner = Boolean(
+    currentUser &&
+      (currentUser.id === order.sharerProfileId || currentUser.id === order.createdBy)
+  );
+  const isProducer = Boolean(currentUser && currentUser.id === order.producerProfileId);
+  const canShowPickupCodes = isOwner || isProducer;
   const myParticipant = currentUser
     ? orderFullValue.participants.find((participant) => participant.profileId === currentUser.id)
     : undefined;
+  const profiles = orderFullValue.profiles ?? {};
+  const sharerProfileMeta = sharerParticipant?.profileId
+    ? profiles[sharerParticipant.profileId]
+    : undefined;
+  const producerProfileMeta =
+    order.producerProfileId && order.producerProfileId !== ''
+      ? profiles[order.producerProfileId]
+      : undefined;
+  const producerName =
+    producerProfileMeta?.name ??
+    orderFullValue.productsOffered[0]?.product?.producerName ??
+    'Producteur';
+  const buildProfileHandle = (value?: string | null) =>
+    value ? value.toLowerCase().replace(/\s+/g, '') : '';
+  const handleAvatarNavigation = (handle?: string | null, fallbackName?: string | null) => {
+    const fallback = buildProfileHandle(fallbackName);
+    const target = (handle ?? '').trim() || fallback;
+    if (!target) return;
+    navigate(`/profil/${encodeURIComponent(target)}`);
+  };
+  const sharerProfileHandle = sharerProfileMeta?.handle ?? sharerParticipant?.profileHandle ?? null;
+  const producerProfileHandle = producerProfileMeta?.handle ?? null;
+  const sharerAvatarPath = sharerProfileMeta?.avatarPath ?? sharerParticipant?.avatarPath ?? null;
+  const sharerAvatarUpdatedAt = sharerProfileMeta?.avatarUpdatedAt ?? sharerParticipant?.avatarUpdatedAt ?? null;
+  const producerAvatarPath = producerProfileMeta?.avatarPath ?? null;
+  const producerAvatarUpdatedAt = producerProfileMeta?.avatarUpdatedAt ?? null;
   const updateOrderLocal = (updates: Partial<typeof order>) => {
     setOrderFull((prev) => (prev ? { ...prev, order: { ...prev.order, ...updates } } : prev));
   };
@@ -318,14 +385,46 @@ export function OrderClientView({
   const shouldShowParticipationRequestButton =
     !isOwner && !myParticipant && !autoApproveParticipationRequests;
 
-  const totalPrice = React.useMemo(
+  const orderEffectiveWeightKg = React.useMemo(
+    () => resolveOrderEffectiveWeightKg(order.orderedWeightKg ?? 0, order.minWeightKg, order.maxWeightKg),
+    [order.maxWeightKg, order.minWeightKg, order.orderedWeightKg]
+  );
+  const unitPriceCentsById = React.useMemo(() => {
+    const deliveryFeeCents = Number.isFinite(order.deliveryFeeCents ?? NaN) ? order.deliveryFeeCents : 0;
+    const feePerKg = orderEffectiveWeightKg > 0 ? deliveryFeeCents / orderEffectiveWeightKg : 0;
+    const shareFraction =
+      order.sharerPercentage > 0 && order.sharerPercentage < 100
+        ? order.sharerPercentage / (100 - order.sharerPercentage)
+        : 0;
+    return products.reduce((acc, product) => {
+      const unitWeightKg = getProductWeightKg(product);
+      const basePriceCents = eurosToCents(product.price);
+      const unitDeliveryCents = Math.round(feePerKg * unitWeightKg);
+      const basePlusDelivery = basePriceCents + unitDeliveryCents;
+      const unitSharerFeeCents = Math.round(basePlusDelivery * shareFraction);
+      acc[product.id] = basePlusDelivery + unitSharerFeeCents;
+      return acc;
+    }, {} as Record<string, number>);
+  }, [order.deliveryFeeCents, order.sharerPercentage, orderEffectiveWeightKg, products]);
+  const unitPriceLabelsById = React.useMemo(() => {
+    return products.reduce((acc, product) => {
+      const unitPriceCents = unitPriceCentsById[product.id];
+      if (Number.isFinite(unitPriceCents ?? NaN)) {
+        acc[product.id] = formatEurosFromCents(unitPriceCents);
+      }
+      return acc;
+    }, {} as Record<string, string>);
+  }, [products, unitPriceCentsById]);
+  const totalPriceCents = React.useMemo(
     () =>
       products.reduce((sum, product) => {
         const qty = quantities[product.id] ?? 0;
-        return sum + product.price * qty;
+        const unitPriceCents = unitPriceCentsById[product.id] ?? eurosToCents(product.price);
+        return sum + unitPriceCents * qty;
       }, 0),
-    [products, quantities]
+    [products, quantities, unitPriceCentsById]
   );
+  const totalPrice = centsToEuros(totalPriceCents);
 
   const alreadyOrderedWeight = order.orderedWeightKg ?? 0;
 
@@ -485,6 +584,21 @@ export function OrderClientView({
       .finally(() => setIsWorking(false));
   };
 
+  const handleCloseOrder = () => {
+    if (!isOwner || isWorking || order.status === 'locked') return;
+    setIsWorking(true);
+    updateOrderStatus(order.id, 'locked')
+      .then(() => {
+        updateOrderLocal({ status: 'locked' });
+        toast.success('Commande cloturee.');
+      })
+      .catch((error) => {
+        console.error('Order status update error:', error);
+        toast.error('Impossible de cloturer la commande.');
+      })
+      .finally(() => setIsWorking(false));
+  };
+
   const handlePurchase = async () => {
     if (totalCards === 0) {
       toast.info('Ajoutez au moins une carte avant de valider.');
@@ -583,8 +697,14 @@ export function OrderClientView({
   const handleApproveParticipant = async (participantId: string) => {
     setIsWorking(true);
     try {
-      await approveParticipation(participantId);
-      await loadOrder();
+      const updatedParticipant = await approveParticipation(participantId);
+      setOrderFull((prev) => {
+        if (!prev) return prev;
+        const participants = prev.participants.map((participant) =>
+          participant.id === updatedParticipant.id ? { ...participant, ...updatedParticipant } : participant
+        );
+        return { ...prev, participants };
+      });
       toast.success('Participation acceptee.');
     } catch (error) {
       console.error('Approve participant error:', error);
@@ -698,18 +818,27 @@ export function OrderClientView({
   const now = React.useMemo(() => new Date(), []);
   const daysLeft = Math.max(0, Math.ceil((deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
   const hasPassedDeadline = deadlineDate.getTime() < now.getTime();
-  const statusLabel =
-    order.status === 'completed'
-      ? 'Terminee'
-      : order.status !== 'open' || hasPassedDeadline
-        ? 'Fermee'
-        : 'En cours';
+  const statusLabel = getOrderStatusLabel(order.status);
+  const statusTone =
+    order.status === 'finished'
+      ? 'success'
+      : order.status === 'cancelled' || order.status === 'locked'
+        ? 'danger'
+        : order.status === 'open'
+          ? 'info'
+          : order.status === 'draft'
+            ? 'muted'
+            : 'warning';
   const statusColor =
-    order.status === 'completed'
+    statusTone === 'success'
       ? 'bg-[#DCFCE7] text-[#166534] border-[#BBF7D0]'
-      : order.status !== 'open' || hasPassedDeadline
+      : statusTone === 'danger'
         ? 'bg-[#FEE2E2] text-[#B91C1C] border-[#FECACA]'
-        : 'bg-[#E0F2FE] text-[#075985] border-[#BAE6FD]';
+        : statusTone === 'warning'
+          ? 'bg-[#FEF3C7] text-[#92400E] border-[#FDE68A]'
+          : statusTone === 'muted'
+            ? 'bg-[#F3F4F6] text-[#4B5563] border-[#E5E7EB]'
+            : 'bg-[#E0F2FE] text-[#075985] border-[#BAE6FD]';
   const productCodeByDbId = React.useMemo(() => {
     const entries = orderFullValue.productsOffered.map((entry) => [
       entry.productId,
@@ -741,6 +870,7 @@ export function OrderClientView({
         quantities,
         totalAmount: centsToEuros(participant.totalAmountCents),
         totalWeight: participant.totalWeightKg,
+        pickupCode: participant.pickupCode ?? null,
       };
     });
   }, [orderFullValue.items, orderFullValue.participants, productCodeByDbId, products]);
@@ -761,6 +891,7 @@ export function OrderClientView({
   const isProfileVisibilityLocked = order.visibility === 'public';
   const hasVisibleColumns = Object.values(viewerVisibility).some(Boolean);
   const canShowParticipants = isOwner || (isAuthenticated && hasVisibleColumns);
+  const shouldShowPickupCodeColumn = canShowPickupCodes;
   const participantsCountLabel = participantsWithTotals.length
     ? `${participantsWithTotals.length} participant${participantsWithTotals.length > 1 ? 's' : ''}`
     : 'Aucun participant pour le moment';
@@ -893,9 +1024,45 @@ export function OrderClientView({
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-2">
                   <h2 className="text-2xl md:text-3xl font-semibold text-[#1F2937] leading-tight">{order.title}</h2>
-                  <p className="text-sm text-[#4B5563]">
-                    Par {sharerName}
-                  </p>
+                  <div className="flex flex-col gap-2 text-sm text-[#4B5563] sm:flex-row sm:items-center sm:gap-4">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleAvatarNavigation(sharerProfileHandle, sharerName)}
+                        aria-label={`Voir le profil de ${sharerName}`}
+                        className="h-10 w-10 rounded-full border border-gray-200 bg-white overflow-hidden p-0 cursor-pointer"
+                      >
+                        <Avatar
+                          supabaseClient={supabaseClient ?? null}
+                          path={sharerAvatarPath}
+                          updatedAt={sharerAvatarUpdatedAt}
+                          fallbackSrc={DEFAULT_PROFILE_AVATAR}
+                          alt={sharerName}
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAvatarNavigation(producerProfileHandle, producerName)}
+                        aria-label={`Voir le profil de ${producerName}`}
+                        className="h-10 w-10 rounded-full border border-gray-200 bg-white overflow-hidden p-0 cursor-pointer"
+                      >
+                        <Avatar
+                          supabaseClient={supabaseClient ?? null}
+                          path={producerAvatarPath}
+                          updatedAt={producerAvatarUpdatedAt}
+                          fallbackSrc={DEFAULT_PROFILE_AVATAR}
+                          alt={producerName}
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                    </div>
+                    <p className="leading-snug text-[#4B5563]">
+                      <span className="font-semibold text-[#1F2937]">{sharerName}</span> se procure des produits
+                      chez <span className="font-semibold text-[#1F2937]">{producerName}</span> : participez avec lui
+                      à la commande
+                    </p>
+                  </div>
                   <div className="flex items-center gap-2 text-xs font-semibold">
                     <span className={`px-2.5 py-1 rounded-full border ${statusColor}`}>{statusLabel}</span>
                   </div>
@@ -991,6 +1158,7 @@ export function OrderClientView({
                 onDirectQuantity={(productId, value) =>
                   setQuantities((prev) => ({ ...prev, [productId]: Math.max(0, value) }))
                 }
+                unitPriceLabelsById={unitPriceLabelsById}
               />
             )}
           </div>
@@ -1074,6 +1242,7 @@ export function OrderClientView({
                   type="button"
                   className="order-client-view__purchase-button order-client-view__close-button"
                   disabled={!isMinimumReached || isWorking}
+                  onClick={handleCloseOrder}
                 >
                   <ShieldCheck className="w-4 h-4" />
                   Clôturer
@@ -1184,8 +1353,23 @@ export function OrderClientView({
                     </div>
                   )}
                 </div>
-              )}
-            </div>
+            )}
+          </div>
+
+            {!canShowPickupCodes && myParticipant && (
+              <div className="order-client-view__pickup-code-card">
+                {myParticipant.pickupCode ? (
+                  <p className="order-client-view__pickup-code-label">
+                    Ton code de retrait :
+                    <span className="order-client-view__pickup-code">{myParticipant.pickupCode}</span>
+                  </p>
+                ) : (
+                  <p className="order-client-view__pickup-code-label">
+                    Ton inscription doit être acceptée pour obtenir un code.
+                  </p>
+                )}
+              </div>
+            )}
 
             {!canShowParticipants ? (
               <div className="order-client-view__participants-masked">
@@ -1213,6 +1397,9 @@ export function OrderClientView({
                       {viewerVisibility.weight && <th className="order-client-view__participants-table-number">Poids</th>}
                       {viewerVisibility.amount && (
                         <th className="order-client-view__participants-table-number">Montant</th>
+                      )}
+                      {shouldShowPickupCodeColumn && (
+                        <th className="order-client-view__participants-table-number">Code</th>
                       )}
                     </tr>
                   </thead>
@@ -1274,6 +1461,11 @@ export function OrderClientView({
                             {formatPrice(participant.totalAmount)}
                           </td>
                         )}
+                        {shouldShowPickupCodeColumn && (
+                          <td className="order-client-view__participants-table-number">
+                            {participant.pickupCode ?? 'En attente'}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -1305,6 +1497,9 @@ export function OrderClientView({
                           <td className="order-client-view__participants-table-number">
                             {formatPrice(totalAmountAll)}
                           </td>
+                        )}
+                        {shouldShowPickupCodeColumn && (
+                          <td className="order-client-view__participants-table-number" />
                         )}
                       </tr>
                     </tfoot>
@@ -1353,11 +1548,13 @@ function OrderProductsCarousel({
   quantities,
   onDeltaQuantity,
   onDirectQuantity,
+  unitPriceLabelsById,
 }: {
   products: Product[];
   quantities: Record<string, number>;
   onDeltaQuantity: (productId: string, delta: number) => void;
   onDirectQuantity: (productId: string, value: number) => void;
+  unitPriceLabelsById: Record<string, string>;
 }) {
   const [startIndex, setStartIndex] = React.useState(0);
   const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
@@ -1450,6 +1647,7 @@ function OrderProductsCarousel({
                 showSelectionControl={false}
                 cardWidth={ORDER_CARD_WIDTH}
                 compact
+                priceLabelOverride={unitPriceLabelsById[product.id]}
               />
               <div className="w-full space-y-2" style={{ maxWidth: ORDER_CARD_WIDTH }}>
                 <p className="text-[12px] text-[#6B7280] text-center">

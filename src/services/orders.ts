@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { DEMO_MODE } from '../data/productsProvider';
 import { getSupabaseClient } from '../lib/supabaseClient';
+import { mockGroupOrders } from '../data/mockData';
 import type { GroupOrder, Product, ProductListingRow } from '../types';
 import {
   centsToEuros,
@@ -18,12 +20,114 @@ import {
   type OrderProductInfo,
   type OrderPickupSlot,
   type OrderStatus,
+  type ParticipationStatus,
   type ParticipantVisibility,
   type Payment,
+  type ProfileSummary,
   type ShareMode,
+  eurosToCents,
 } from '../types/orders';
 
 const PRODUCT_IMAGE_BUCKET = 'product-images';
+
+type DemoOrderState = {
+  participants: OrderParticipant[];
+  items: OrderItem[];
+  payments: Payment[];
+};
+
+const demoOrdersRef: { orders: GroupOrder[] } = {
+  orders: [...mockGroupOrders],
+};
+
+const demoOrderOverrides = new Map<string, Partial<Order>>();
+const demoStateByOrderId = new Map<string, DemoOrderState>();
+
+const defaultParticipantsVisibility: ParticipantVisibility = {
+  profile: false,
+  content: false,
+  weight: false,
+  amount: false,
+};
+
+export const setDemoOrders = (orders: GroupOrder[]) => {
+  if (!DEMO_MODE) return;
+  demoOrdersRef.orders = orders;
+};
+
+const findDemoOrder = (orderCode: string) => {
+  const normalized = orderCode.trim();
+  return demoOrdersRef.orders.find(
+    (order) => order.orderCode === normalized || order.id === normalized
+  );
+};
+
+const findDemoOrderById = (orderId: string) =>
+  demoOrdersRef.orders.find((order) => order.id === orderId);
+
+const applyDemoOrderOverrides = (order: Order): Order => {
+  const overrides = demoOrderOverrides.get(order.id);
+  if (!overrides) return order;
+  return { ...order, ...overrides };
+};
+
+const ensureDemoState = (order: GroupOrder): DemoOrderState => {
+  const existing = demoStateByOrderId.get(order.id);
+  if (existing) return existing;
+  const now = new Date();
+  const sharerParticipant: OrderParticipant = {
+    id: `demo-${order.id}-sharer`,
+    orderId: order.id,
+    profileId: order.sharerId,
+    role: 'sharer',
+    participationStatus: 'accepted',
+    requestMessage: null,
+    requestedAt: now,
+    reviewedAt: now,
+    reviewedBy: null,
+    pickupSlotId: null,
+    pickupSlotStatus: null,
+    pickupSlotRequestedAt: null,
+    pickupSlotReviewedAt: null,
+    pickupSlotReviewedBy: null,
+    totalWeightKg: 0,
+    totalAmountCents: 0,
+    createdAt: now,
+    updatedAt: now,
+    profileName: order.sharerName ?? 'Partageur',
+    profileHandle: null,
+    avatarPath: null,
+    avatarUpdatedAt: null,
+  };
+  const state: DemoOrderState = {
+    participants: [sharerParticipant],
+    items: [],
+    payments: [],
+  };
+  demoStateByOrderId.set(order.id, state);
+  return state;
+};
+
+const refreshDemoParticipantTotals = (state: DemoOrderState) => {
+  const totalsByParticipant = new Map<string, { weight: number; amount: number }>();
+  state.items.forEach((item) => {
+    const current = totalsByParticipant.get(item.participantId) ?? { weight: 0, amount: 0 };
+    current.weight += item.lineWeightKg;
+    current.amount += item.lineTotalCents;
+    totalsByParticipant.set(item.participantId, current);
+  });
+  const now = new Date();
+  state.participants = state.participants.map((participant) => {
+    const totals = totalsByParticipant.get(participant.id);
+    if (!totals) return participant;
+    return {
+      ...participant,
+      totalWeightKg: totals.weight,
+      totalAmountCents: totals.amount,
+      updatedAt: now,
+    };
+  });
+};
 
 const getClient = (): SupabaseClient => {
   try {
@@ -136,6 +240,9 @@ const mapParticipantRow = (row: DbOrderParticipant): OrderParticipant => ({
   totalAmountCents: row.total_amount_cents,
   createdAt: new Date(row.created_at),
   updatedAt: new Date(row.updated_at),
+  pickupCode: row.pickup_code,
+  pickupCodeGeneratedAt: toDate(row.pickup_code_generated_at),
+  pickedUpAt: toDate(row.picked_up_at),
 });
 
 const mapItemRow = (row: DbOrderItem): OrderItem => ({
@@ -258,8 +365,11 @@ const fetchProfilesByIds = async (client: SupabaseClient, profileIds: string[]) 
   return (data as Array<Record<string, unknown>>) ?? [];
 };
 
+const isPositiveNumber = (value: number | null | undefined) =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0;
+
 const resolveUnitWeightKg = (saleUnit: string | null, unitWeightKg: number | null, packaging?: string | null) => {
-  if (typeof unitWeightKg === 'number' && Number.isFinite(unitWeightKg)) return unitWeightKg;
+  if (isPositiveNumber(unitWeightKg)) return unitWeightKg;
   const unitLabel = packaging?.toLowerCase() ?? '';
   const match = unitLabel.match(/([\d.,]+)\s*(kg|g)/);
   if (match) {
@@ -270,6 +380,15 @@ const resolveUnitWeightKg = (saleUnit: string | null, unitWeightKg: number | nul
   }
   if (saleUnit === 'kg') return 1;
   return 0.25;
+};
+
+const resolveEffectiveWeightKg = (orderedWeightKg: number, minWeightKg: number, maxWeightKg: number | null) => {
+  const current = Math.max(0, orderedWeightKg ?? 0);
+  const min = Math.max(0, minWeightKg ?? 0);
+  if (typeof maxWeightKg === 'number' && maxWeightKg > 0) {
+    return Math.min(Math.max(current, min), maxWeightKg);
+  }
+  return Math.max(current, min);
 };
 
 const calculateOrderItemPricing = (params: {
@@ -295,6 +414,132 @@ const calculateOrderItemPricing = (params: {
     lineTotalCents: unitFinalPriceCents * quantityUnits,
     lineWeightKg: unitWeightKg * quantityUnits,
   };
+};
+
+const buildDemoOrder = (order: GroupOrder): Order => {
+  const now = new Date();
+  const orderedWeightKg = order.orderedWeight ?? 0;
+  const minWeightKg = order.minWeight ?? 0;
+  const maxWeightKg = order.maxWeight > 0 ? order.maxWeight : null;
+  const participantTotalCents = eurosToCents(order.totalValue ?? 0);
+  const pickupDeliveryFeeCents = eurosToCents(order.pickupDeliveryFee ?? 0);
+  const status: OrderStatus = order.status;
+    const demoOrder: Order = {
+      id: order.id,
+      orderCode: order.orderCode ?? order.id,
+      createdBy: order.sharerId,
+      sharerProfileId: order.sharerId,
+      producerProfileId: order.producerId,
+    title: order.title,
+    visibility: order.visibility,
+    status,
+    deadline: order.deadline ?? null,
+    message: order.message ?? null,
+    autoApproveParticipationRequests: order.autoApproveParticipationRequests ?? false,
+    allowSharerMessages: order.allowSharerMessages ?? true,
+    autoApprovePickupSlots: order.autoApprovePickupSlots ?? false,
+    minWeightKg,
+    maxWeightKg,
+    orderedWeightKg,
+    deliveryOption: 'producer_pickup',
+    deliveryStreet: null,
+    deliveryInfo: null,
+    deliveryCity: null,
+    deliveryPostcode: null,
+    deliveryAddress: null,
+    deliveryLat: null,
+    deliveryLng: null,
+    estimatedDeliveryDate: order.estimatedDeliveryDate ?? null,
+    pickupStreet: order.pickupStreet ?? null,
+    pickupInfo: null,
+    pickupCity: order.pickupCity ?? null,
+    pickupPostcode: order.pickupPostcode ?? null,
+    pickupAddress: order.pickupAddress ?? null,
+    pickupLat: order.mapLocation?.lat ?? null,
+    pickupLng: order.mapLocation?.lng ?? null,
+    usePickupDate: false,
+    pickupDate: null,
+    pickupWindowWeeks: order.pickupWindowWeeks ?? null,
+    pickupDeliveryFeeCents,
+    sharerPercentage: order.sharerPercentage ?? 0,
+    shareMode: order.sharerQuantities ? 'products' : 'cash',
+    sharerQuantities: order.sharerQuantities ?? {},
+    currency: 'EUR',
+      baseTotalCents: participantTotalCents,
+      deliveryFeeCents: pickupDeliveryFeeCents,
+      participantTotalCents,
+      sharerShareCents: 0,
+      effectiveWeightKg: resolveEffectiveWeightKg(orderedWeightKg, minWeightKg, maxWeightKg),
+      participantsVisibility: defaultParticipantsVisibility,
+      createdAt: now,
+      updatedAt: now,
+    };
+  return applyDemoOrderOverrides(demoOrder);
+};
+
+const buildDemoProductsOffered = (order: GroupOrder, demoOrder: Order): OrderProduct[] => {
+  const now = new Date();
+  return order.products.map((product, index) => {
+    const unitWeightKg = resolveUnitWeightKg(
+      product.measurement === 'kg' ? 'kg' : 'unit',
+      product.weightKg ?? null,
+      product.unit
+    );
+    const unitBasePriceCents = eurosToCents(product.price);
+    const pricing = calculateOrderItemPricing({
+      order: demoOrder,
+      basePriceCents: unitBasePriceCents,
+      unitWeightKg,
+      quantityUnits: 1,
+    });
+    const productId = product.dbId ?? product.id;
+    return {
+      id: `demo-order-product-${order.id}-${index}`,
+      orderId: order.id,
+      productId,
+      sortOrder: index,
+      isEnabled: true,
+      unitLabel: product.unit ?? null,
+      unitWeightKg,
+      unitBasePriceCents,
+      unitDeliveryCents: pricing.unitDeliveryCents,
+      unitSharerFeeCents: pricing.unitSharerFeeCents,
+      unitFinalPriceCents: pricing.unitFinalPriceCents,
+      priceBreakdownSnapshot: null,
+      createdAt: now,
+      updatedAt: now,
+      product: {
+        id: productId,
+        code: product.productCode ?? product.id,
+        slug: product.slug ?? null,
+        name: product.name,
+        description: product.description ?? null,
+        packaging: product.unit ?? null,
+        measurement: product.measurement,
+        unitWeightKg,
+        imageUrl: product.imageUrl ?? null,
+        producerProfileId: product.producerId ?? null,
+        producerName: product.producerName ?? null,
+        producerLocation: product.producerLocation ?? null,
+      },
+    };
+  });
+};
+
+const buildDemoPickupSlots = (order: GroupOrder, orderId: string): OrderPickupSlot[] => {
+  const slots = order.pickupSlots ?? [];
+  return slots.map((slot, index) => ({
+    id: `demo-pickup-slot-${orderId}-${index}`,
+    orderId,
+    slotType: slot.date ? 'date' : 'weekday',
+    day: slot.day ?? null,
+    slotDate: slot.date ?? null,
+    label: slot.label ?? slot.date ?? slot.day ?? 'Creneau',
+    enabled: true,
+    startTime: slot.start ?? '',
+    endTime: slot.end ?? '',
+    sortOrder: index,
+  }));
 };
 
 export type CreateOrderPayload = {
@@ -548,6 +793,11 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
 };
 
 export const getOrderByCode = async (orderCode: string): Promise<Order> => {
+  if (DEMO_MODE) {
+    const demoOrder = findDemoOrder(orderCode);
+    if (!demoOrder) throw new Error('Commande introuvable.');
+    return buildDemoOrder(demoOrder);
+  }
   const client = getClient();
   const { data, error } = await client.from('orders').select('*').eq('order_code', orderCode).maybeSingle();
   if (error || !data) throw error ?? new Error('Commande introuvable.');
@@ -555,6 +805,40 @@ export const getOrderByCode = async (orderCode: string): Promise<Order> => {
 };
 
 export const getOrderFullByCode = async (orderCode: string): Promise<OrderFull> => {
+  if (DEMO_MODE) {
+    const demoOrder = findDemoOrder(orderCode);
+    if (!demoOrder) throw new Error('Commande introuvable.');
+    const demoOrderRow = buildDemoOrder(demoOrder);
+    const demoState = ensureDemoState(demoOrder);
+    refreshDemoParticipantTotals(demoState);
+    const demoProfiles: Record<string, ProfileSummary> = {};
+    const demoSharerProfile = demoState.participants.find((participant) => participant.role === 'sharer');
+    if (demoOrderRow.sharerProfileId) {
+      demoProfiles[demoOrderRow.sharerProfileId] = {
+        name: demoSharerProfile?.profileName ?? null,
+        handle: demoSharerProfile?.profileHandle ?? null,
+        avatarPath: demoSharerProfile?.avatarPath ?? null,
+        avatarUpdatedAt: demoSharerProfile?.avatarUpdatedAt ?? null,
+      };
+    }
+    if (demoOrderRow.producerProfileId) {
+      demoProfiles[demoOrderRow.producerProfileId] = {
+        name: demoOrder.producerName ?? null,
+        handle: null,
+        avatarPath: null,
+        avatarUpdatedAt: null,
+      };
+    }
+    return {
+      order: demoOrderRow,
+      productsOffered: buildDemoProductsOffered(demoOrder, demoOrderRow),
+      pickupSlots: buildDemoPickupSlots(demoOrder, demoOrderRow.id),
+      participants: demoState.participants,
+      items: demoState.items,
+      payments: demoState.payments,
+      profiles: demoProfiles,
+    };
+  }
   const client = getClient();
   const orderRow = await getOrderByCode(orderCode);
 
@@ -576,10 +860,7 @@ export const getOrderFullByCode = async (orderCode: string): Promise<OrderFull> 
   const participantIds = participants.map((row) => row.profile_id).filter(Boolean) as string[];
   const profileIds = Array.from(new Set([orderRow.sharerProfileId, orderRow.producerProfileId, ...participantIds]));
   const profiles = await fetchProfilesByIds(client, profileIds);
-  const profileMap = new Map<
-    string,
-    { name?: string | null; handle?: string | null; avatarPath?: string | null; avatarUpdatedAt?: string | null }
-  >();
+  const profileMap = new Map<string, ProfileSummary>();
   profiles.forEach((profile) => {
     const id = profile.id as string;
     if (!id) return;
@@ -602,6 +883,10 @@ export const getOrderFullByCode = async (orderCode: string): Promise<OrderFull> 
       avatarUpdatedAt: profile?.avatarUpdatedAt ?? null,
     };
   });
+  const profilesRecord: Record<string, ProfileSummary> = {};
+  profileMap.forEach((value, key) => {
+    profilesRecord[key] = value;
+  });
 
   const orderProductRows = (orderProductsRes.data as DbOrderProduct[] | null) ?? [];
   const orderProductIds = Array.from(new Set(orderProductRows.map((row) => row.product_id)));
@@ -621,10 +906,57 @@ export const getOrderFullByCode = async (orderCode: string): Promise<OrderFull> 
     participants: mappedParticipants,
     items: ((itemsRes.data as DbOrderItem[] | null) ?? []).map(mapItemRow),
     payments: ((paymentsRes.data as DbPayment[] | null) ?? []).map(mapPaymentRow),
+    profiles: profilesRecord,
   };
 };
 
 export const requestParticipation = async (orderCode: string, profileId: string, message?: string) => {
+  if (DEMO_MODE) {
+    const demoOrder = findDemoOrder(orderCode);
+    if (!demoOrder) throw new Error('Commande introuvable.');
+    const state = ensureDemoState(demoOrder);
+    const demoOrderRow = buildDemoOrder(demoOrder);
+    const autoApprove = demoOrderRow.autoApproveParticipationRequests;
+    const status: ParticipationStatus = autoApprove ? 'accepted' : 'requested';
+    const now = new Date();
+    const existing = state.participants.find(
+      (participant) => participant.profileId === profileId && participant.role === 'participant'
+    );
+    if (existing) {
+      existing.participationStatus = status;
+      existing.requestMessage = message ?? null;
+      existing.requestedAt = now;
+      existing.reviewedAt = status === 'accepted' ? now : null;
+      existing.updatedAt = now;
+      return existing;
+    }
+    const participant: OrderParticipant = {
+      id: `demo-${demoOrder.id}-${profileId}`,
+      orderId: demoOrder.id,
+      profileId,
+      role: 'participant',
+      participationStatus: status,
+      requestMessage: message ?? null,
+      requestedAt: now,
+      reviewedAt: status === 'accepted' ? now : null,
+      reviewedBy: null,
+      pickupSlotId: null,
+      pickupSlotStatus: null,
+      pickupSlotRequestedAt: null,
+      pickupSlotReviewedAt: null,
+      pickupSlotReviewedBy: null,
+      totalWeightKg: 0,
+      totalAmountCents: 0,
+      createdAt: now,
+      updatedAt: now,
+      profileName: null,
+      profileHandle: null,
+      avatarPath: null,
+      avatarUpdatedAt: null,
+    };
+    state.participants.push(participant);
+    return participant;
+  }
   const client = getClient();
   const order = await client
     .from('orders')
@@ -673,6 +1005,18 @@ export const requestParticipation = async (orderCode: string, profileId: string,
 };
 
 export const approveParticipation = async (participantId: string) => {
+  if (DEMO_MODE) {
+    for (const state of demoStateByOrderId.values()) {
+      const participant = state.participants.find((entry) => entry.id === participantId);
+      if (!participant) continue;
+      const now = new Date();
+      participant.participationStatus = 'accepted';
+      participant.reviewedAt = now;
+      participant.updatedAt = now;
+      return participant;
+    }
+    throw new Error('Participant introuvable.');
+  }
   const client = getClient();
   const { data, error } = await client
     .from('order_participants')
@@ -685,6 +1029,18 @@ export const approveParticipation = async (participantId: string) => {
 };
 
 export const rejectParticipation = async (participantId: string) => {
+  if (DEMO_MODE) {
+    for (const state of demoStateByOrderId.values()) {
+      const participant = state.participants.find((entry) => entry.id === participantId);
+      if (!participant) continue;
+      const now = new Date();
+      participant.participationStatus = 'rejected';
+      participant.reviewedAt = now;
+      participant.updatedAt = now;
+      return participant;
+    }
+    throw new Error('Participant introuvable.');
+  }
   const client = getClient();
   const { data, error } = await client
     .from('order_participants')
@@ -701,6 +1057,21 @@ export const setParticipantPickupSlot = async (params: {
   participantId: string;
   pickupSlotId: string;
 }) => {
+  if (DEMO_MODE) {
+    const demoOrder = findDemoOrderById(params.orderId);
+    if (!demoOrder) throw new Error('Commande introuvable.');
+    const state = ensureDemoState(demoOrder);
+    const participant = state.participants.find((entry) => entry.id === params.participantId);
+    if (!participant) throw new Error('Participant introuvable.');
+    const demoOrderRow = buildDemoOrder(demoOrder);
+    const autoApprove = demoOrderRow.autoApprovePickupSlots;
+    const now = new Date();
+    participant.pickupSlotId = params.pickupSlotId;
+    participant.pickupSlotStatus = autoApprove ? 'accepted' : 'requested';
+    participant.pickupSlotRequestedAt = now;
+    participant.updatedAt = now;
+    return participant;
+  }
   const client = getClient();
   const order = await client.from('orders').select('auto_approve_pickup_slots').eq('id', params.orderId).maybeSingle();
   if (order.error || !order.data) throw order.error ?? new Error('Commande introuvable.');
@@ -727,6 +1098,58 @@ export const addItem = async (params: {
   lotId?: string | null;
   quantityUnits: number;
 }) => {
+  if (DEMO_MODE) {
+    const demoOrder = findDemoOrderById(params.orderId);
+    if (!demoOrder) throw new Error('Commande introuvable.');
+    const state = ensureDemoState(demoOrder);
+    const participant = state.participants.find((entry) => entry.id === params.participantId);
+    if (!participant) throw new Error('Participant introuvable.');
+    const product = demoOrder.products.find(
+      (entry) =>
+        (entry.dbId ?? entry.id) === params.productId ||
+        entry.productCode === params.productId ||
+        entry.id === params.productId
+    );
+    if (!product) throw new Error('Produit non propose pour cette commande.');
+    const quantityUnits = Math.max(0, Number(params.quantityUnits) || 0);
+    if (!quantityUnits) throw new Error('Quantite invalide.');
+    const demoOrderRow = buildDemoOrder(demoOrder);
+    const unitWeightKg = resolveUnitWeightKg(
+      product.measurement === 'kg' ? 'kg' : 'unit',
+      product.weightKg ?? null,
+      product.unit
+    );
+    const unitBasePriceCents = eurosToCents(product.price);
+    const pricing = calculateOrderItemPricing({
+      order: demoOrderRow,
+      basePriceCents: unitBasePriceCents,
+      unitWeightKg,
+      quantityUnits,
+    });
+    const now = new Date();
+    const item: OrderItem = {
+      id: `demo-item-${params.orderId}-${now.getTime()}`,
+      orderId: params.orderId,
+      participantId: params.participantId,
+      productId: product.dbId ?? product.id,
+      lotId: params.lotId ?? null,
+      quantityUnits,
+      unitLabel: product.unit ?? null,
+      unitWeightKg,
+      unitBasePriceCents,
+      unitDeliveryCents: pricing.unitDeliveryCents,
+      unitSharerFeeCents: pricing.unitSharerFeeCents,
+      unitFinalPriceCents: pricing.unitFinalPriceCents,
+      lineTotalCents: pricing.lineTotalCents,
+      lineWeightKg: pricing.lineWeightKg,
+      isSharerShare: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    state.items.push(item);
+    refreshDemoParticipantTotals(state);
+    return item;
+  }
   const client = getClient();
   const [
     { data: orderRow, error: orderError },
@@ -773,14 +1196,20 @@ export const addItem = async (params: {
   const resolvedLotId = params.lotId ?? existingLotId ?? null;
 
   const unitWeightKg =
-    orderProduct.unit_weight_kg ??
+    (isPositiveNumber(orderProduct.unit_weight_kg) ? orderProduct.unit_weight_kg : null) ??
     resolveUnitWeightKg(productRow.sale_unit, productRow.unit_weight_kg, productRow.packaging);
   const unitBasePriceCents = orderProduct.unit_base_price_cents;
-  const unitDeliveryCents = orderProduct.unit_delivery_cents;
-  const unitSharerFeeCents = orderProduct.unit_sharer_fee_cents;
-  const unitFinalPriceCents = orderProduct.unit_final_price_cents;
-  const lineTotalCents = unitFinalPriceCents * params.quantityUnits;
-  const lineWeightKg = unitWeightKg * params.quantityUnits;
+  const pricing = calculateOrderItemPricing({
+    order: mapOrderRow(orderRow as DbOrder),
+    basePriceCents: unitBasePriceCents,
+    unitWeightKg,
+    quantityUnits: params.quantityUnits,
+  });
+  const unitDeliveryCents = pricing.unitDeliveryCents;
+  const unitSharerFeeCents = pricing.unitSharerFeeCents;
+  const unitFinalPriceCents = pricing.unitFinalPriceCents;
+  const lineTotalCents = pricing.lineTotalCents;
+  const lineWeightKg = pricing.lineWeightKg;
 
   const { data: itemRow, error: itemError } = await client
     .from('order_items')
@@ -831,76 +1260,11 @@ export const removeItem = async (orderItemId: string, orderId: string, participa
 
 export const recomputeCaches = async (orderId: string, participantId?: string) => {
   const client = getClient();
-  const [{ data: orderRow, error: orderError }, { data: itemRows, error: itemsError }] = await Promise.all([
-    client.from('orders').select('*').eq('id', orderId).maybeSingle(),
-    client.from('order_items').select('*').eq('order_id', orderId),
-  ]);
-  if (orderError || !orderRow) throw orderError ?? new Error('Commande introuvable.');
-  if (itemsError) throw itemsError;
-
-  const order = mapOrderRow(orderRow as DbOrder);
-  const items = (itemRows as DbOrderItem[]) ?? [];
-
-  const totalsByParticipant = new Map<string, { weight: number; amount: number }>();
-  let totalWeight = 0;
-  let baseTotal = 0;
-  let deliveryTotal = 0;
-  let sharerTotal = 0;
-  let participantTotal = 0;
-
-  items.forEach((item) => {
-    totalWeight += Number(item.line_weight_kg ?? 0);
-    baseTotal += item.unit_base_price_cents * item.quantity_units;
-    deliveryTotal += item.unit_delivery_cents * item.quantity_units;
-    sharerTotal += item.unit_sharer_fee_cents * item.quantity_units;
-    participantTotal += item.line_total_cents;
-
-    const current = totalsByParticipant.get(item.participant_id) ?? { weight: 0, amount: 0 };
-    current.weight += Number(item.line_weight_kg ?? 0);
-    current.amount += item.line_total_cents;
-    totalsByParticipant.set(item.participant_id, current);
+  const { error } = await client.rpc('recompute_order_caches', {
+    p_order_id: orderId,
+    p_participant_id: participantId ?? null,
   });
-
-  const effectiveWeight = Math.max(totalWeight, order.minWeightKg);
-
-  const { error: orderUpdateError } = await client
-    .from('orders')
-    .update({
-      ordered_weight_kg: totalWeight,
-      base_total_cents: baseTotal,
-      delivery_fee_cents: deliveryTotal,
-      participant_total_cents: participantTotal,
-      sharer_share_cents: sharerTotal,
-      effective_weight_kg: effectiveWeight,
-    })
-    .eq('id', orderId);
-  if (orderUpdateError) throw orderUpdateError;
-
-  if (totalsByParticipant.size > 0) {
-    if (participantId) {
-      const totals = totalsByParticipant.get(participantId);
-      if (totals) {
-        const { error: participantError } = await client
-          .from('order_participants')
-          .update({
-            total_weight_kg: totals.weight,
-            total_amount_cents: totals.amount,
-          })
-          .eq('id', participantId);
-        if (participantError) throw participantError;
-      }
-    } else {
-      const updates = Array.from(totalsByParticipant.entries()).map(([entryId, totals]) => ({
-        id: entryId,
-        total_weight_kg: totals.weight,
-        total_amount_cents: totals.amount,
-      }));
-      const { error: participantError } = await client
-        .from('order_participants')
-        .upsert(updates, { onConflict: 'id' });
-      if (participantError) throw participantError;
-    }
-  }
+  if (error) throw error;
 };
 
 export const listOrdersForUser = async (profileId: string): Promise<GroupOrder[]> => {
@@ -1011,19 +1375,20 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
       producerId: order.producerProfileId,
       producerName,
       sharerPercentage: order.sharerPercentage,
-      sharerQuantities: order.sharerQuantities,
-      minWeight: order.minWeightKg,
-      maxWeight: order.maxWeightKg ?? 0,
-      orderedWeight: order.orderedWeightKg,
-      estimatedDeliveryDate: order.estimatedDeliveryDate ?? undefined,
-      pickupWindowWeeks: order.pickupWindowWeeks ?? undefined,
-      deadline: order.deadline ?? new Date(),
+        sharerQuantities: order.sharerQuantities,
+        minWeight: order.minWeightKg,
+        maxWeight: order.maxWeightKg ?? 0,
+        orderedWeight: order.orderedWeightKg,
+        deliveryFeeCents: order.deliveryFeeCents,
+        estimatedDeliveryDate: order.estimatedDeliveryDate ?? undefined,
+        pickupWindowWeeks: order.pickupWindowWeeks ?? undefined,
+        deadline: order.deadline ?? new Date(),
       pickupStreet: order.pickupStreet ?? undefined,
       pickupCity: order.pickupCity ?? undefined,
       pickupPostcode: order.pickupPostcode ?? undefined,
       pickupAddress: order.pickupAddress ?? '',
       message: order.message ?? '',
-      status: (order.status === 'completed' ? 'completed' : order.status === 'open' ? 'open' : 'closed') as GroupOrder['status'],
+      status: order.status,
       visibility: order.visibility,
       autoApproveParticipationRequests: order.autoApproveParticipationRequests,
       allowSharerMessages: order.allowSharerMessages,
@@ -1044,6 +1409,33 @@ export const createPaymentStub = async (params: {
   status?: Payment['status'];
   provider?: string;
 }) => {
+  if (DEMO_MODE) {
+    const demoOrder = findDemoOrderById(params.orderId);
+    if (!demoOrder) throw new Error('Commande introuvable.');
+    const state = ensureDemoState(demoOrder);
+    const now = new Date();
+    const payment: Payment = {
+      id: `demo-payment-${params.orderId}-${now.getTime()}`,
+      orderId: params.orderId,
+      participantId: params.participantId,
+      provider: params.provider ?? 'demo',
+      providerPaymentId: null,
+      idempotencyKey: null,
+      status: params.status ?? 'pending',
+      amountCents: params.amountCents,
+      feeCents: 0,
+      refundedAmountCents: 0,
+      currency: 'EUR',
+      paidAt: params.status === 'paid' ? now : null,
+      failureCode: null,
+      failureMessage: null,
+      raw: {},
+      createdAt: now,
+      updatedAt: now,
+    };
+    state.payments.push(payment);
+    return payment;
+  }
   const client = getClient();
   const { data, error } = await client
     .from('payments')
@@ -1061,6 +1453,12 @@ export const createPaymentStub = async (params: {
 };
 
 export const getParticipantByProfile = async (orderId: string, profileId: string): Promise<OrderParticipant | null> => {
+  if (DEMO_MODE) {
+    const demoOrder = findDemoOrderById(orderId);
+    if (!demoOrder) return null;
+    const state = ensureDemoState(demoOrder);
+    return state.participants.find((participant) => participant.profileId === profileId) ?? null;
+  }
   const client = getClient();
   const { data, error } = await client
     .from('order_participants')
@@ -1080,6 +1478,10 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus) =>
 };
 
 export const updateOrderVisibility = async (orderId: string, visibility: 'public' | 'private') => {
+  if (DEMO_MODE) {
+    demoOrderOverrides.set(orderId, { visibility });
+    return;
+  }
   const client = getClient();
   const { error } = await client.from('orders').update({ visibility }).eq('id', orderId);
   if (error) throw error;
@@ -1093,6 +1495,11 @@ export const updateOrderParticipantSettings = async (
     autoApprovePickupSlots?: boolean;
   }
 ) => {
+  if (DEMO_MODE) {
+    const existing = demoOrderOverrides.get(orderId) ?? {};
+    demoOrderOverrides.set(orderId, { ...existing, ...updates });
+    return;
+  }
   const client = getClient();
   const { error } = await client
     .from('orders')
@@ -1115,6 +1522,10 @@ export const updateParticipantsVisibility = async (
   orderId: string,
   participantsVisibility: ParticipantVisibility
 ) => {
+  if (DEMO_MODE) {
+    demoOrderOverrides.set(orderId, { participantsVisibility });
+    return;
+  }
   const client = getClient();
   const { error } = await client
     .from('orders')

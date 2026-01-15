@@ -280,6 +280,29 @@
   position: relative;
 }
 
+.order-client-view__pickup-code-card {
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+  padding: 12px 16px;
+  color: #111827;
+}
+
+.order-client-view__pickup-code-label {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.order-client-view__pickup-code {
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
 .order-client-view__participants-title {
   font-size: 1rem;
   font-weight: 600;

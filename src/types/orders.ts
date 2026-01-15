@@ -4,8 +4,10 @@ export type OrderStatus =
   | 'locked'
   | 'confirmed'
   | 'preparing'
-  | 'ready'
-  | 'completed'
+  | 'prepared'
+  | 'delivered'
+  | 'distributed'
+  | 'finished'
   | 'cancelled';
 
 export type DeliveryOption = 'chronofresh' | 'producer_delivery' | 'producer_pickup';
@@ -122,6 +124,9 @@ export type DbOrderParticipant = {
   total_amount_cents: number;
   created_at: string;
   updated_at: string;
+  pickup_code: string | null;
+  pickup_code_generated_at: string | null;
+  picked_up_at: string | null;
 };
 
 export type DbOrderItem = {
@@ -303,6 +308,16 @@ export type OrderParticipant = {
   profileHandle?: string | null;
   avatarPath?: string | null;
   avatarUpdatedAt?: string | null;
+  pickupCode: string | null;
+  pickupCodeGeneratedAt: Date | null;
+  pickedUpAt: Date | null;
+};
+
+export type ProfileSummary = {
+  name?: string | null;
+  handle?: string | null;
+  avatarPath?: string | null;
+  avatarUpdatedAt?: string | null;
 };
 
 export type OrderItem = {
@@ -364,6 +379,7 @@ export type OrderFull = {
   participants: OrderParticipant[];
   items: OrderItem[];
   payments: Payment[];
+  profiles?: Record<string, ProfileSummary>;
 };
 
 export const centsToEuros = (value: number) => Math.round(value) / 100;

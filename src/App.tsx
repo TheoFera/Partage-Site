@@ -46,6 +46,7 @@ import {
   listOrdersForUser,
   listPublicOrders,
   requestParticipation,
+  setDemoOrders,
 } from './services/orders';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
@@ -214,6 +215,7 @@ type OrderRouteProps = {
   onClose: () => void;
   onOpenParticipantProfile: (participantName: string) => void;
   onStartPurchase: (order: GroupOrder, payload: StartPaymentPayload) => void;
+  supabaseClient?: SupabaseClient | null;
 };
 
 const OrderRoute = ({
@@ -222,6 +224,7 @@ const OrderRoute = ({
   onClose,
   onOpenParticipantProfile,
   onStartPurchase,
+  supabaseClient,
 }: OrderRouteProps) => {
   const params = useParams<{ orderCode: string }>();
   if (!params.orderCode) return <NotFound message="Commande introuvable." />;
@@ -238,6 +241,7 @@ const OrderRoute = ({
         }
         onStartPurchase(order, payload);
       }}
+      supabaseClient={supabaseClient}
     />
   );
 };
@@ -588,6 +592,7 @@ type ProfileRouteProps = {
   viewer: User;
   products: Product[];
   groupOrders: GroupOrder[];
+  userOrders: GroupOrder[];
   deck: DeckCard[];
   deckSelectionIds: Set<string>;
   canSaveProduct: boolean;
@@ -616,6 +621,7 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
   viewer,
   products,
   groupOrders,
+  userOrders,
   deck,
   deckSelectionIds,
   canSaveProduct,
@@ -709,38 +715,66 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
     }
   }, [location.pathname, navigate, profileUser?.handle, resolvedIsOwn]);
 
+  const safeProducts = products ?? [];
+  const safeGroupOrders = groupOrders ?? [];
+  const safeUserOrders = userOrders ?? [];
+
   const producerProductsForProfile = React.useMemo(() => {
     const byId = profileUser?.producerId
-      ? products.filter((product) => product.producerId === profileUser.producerId)
+      ? safeProducts.filter((product) => product.producerId === profileUser.producerId)
       : [];
     if (byId.length) return byId;
-    return products.filter((product) => product.producerName === profileUser?.name);
-  }, [products, profileUser?.name, profileUser?.producerId]);
+    return safeProducts.filter((product) => product.producerName === profileUser?.name);
+  }, [safeProducts, profileUser?.name, profileUser?.producerId]);
 
-  const sharerOrdersForProfile = React.useMemo(
-    () => groupOrders.filter((order) => order.sharerId === profileUser?.id),
-    [groupOrders, profileUser?.id]
-  );
+  const sharerOrdersForProfile = React.useMemo(() => {
+    const source = resolvedIsOwn ? safeUserOrders : safeGroupOrders;
+    return source.filter((order) => order.sharerId === profileUser?.id);
+  }, [safeGroupOrders, profileUser?.id, resolvedIsOwn, safeUserOrders]);
 
   const producerOrdersForProfile = React.useMemo(() => {
     const byId = profileUser?.producerId
-      ? groupOrders.filter((order) => order.producerId === profileUser.producerId)
+      ? safeGroupOrders.filter((order) => order.producerId === profileUser.producerId)
       : [];
     if (byId.length) return byId;
-    return groupOrders.filter((order) => order.producerName === profileUser?.name);
-  }, [groupOrders, profileUser?.name, profileUser?.producerId]);
+    return safeGroupOrders.filter((order) => order.producerName === profileUser?.name);
+  }, [safeGroupOrders, profileUser?.name, profileUser?.producerId]);
+
+  const participantOrdersForProfile = React.useMemo(() => {
+    if (!resolvedIsOwn || !profileUser) return [];
+    return safeUserOrders.filter((order) => order.sharerId !== profileUser.id);
+  }, [profileUser, resolvedIsOwn, safeUserOrders]);
 
   const mergedOrdersForProfile = React.useMemo(() => {
-    const source =
-      profileUser?.role === 'producer'
-        ? [...producerOrdersForProfile, ...sharerOrdersForProfile]
-        : [...sharerOrdersForProfile];
+    let source: GroupOrder[] = [];
+    if (profileUser?.role === 'producer') {
+      source = [
+        ...producerOrdersForProfile,
+        ...sharerOrdersForProfile,
+        ...(resolvedIsOwn ? participantOrdersForProfile : []),
+      ];
+    } else if (profileUser?.role === 'sharer') {
+      source = [
+        ...sharerOrdersForProfile,
+        ...(resolvedIsOwn ? participantOrdersForProfile : []),
+      ];
+    } else if (resolvedIsOwn) {
+      source = [...participantOrdersForProfile];
+    } else {
+      source = [...sharerOrdersForProfile];
+    }
     const unique = new Map<string, GroupOrder>();
     source.forEach((order) => {
       if (!unique.has(order.id)) unique.set(order.id, order);
     });
     return Array.from(unique.values());
-  }, [producerOrdersForProfile, profileUser?.role, sharerOrdersForProfile]);
+  }, [
+    participantOrdersForProfile,
+    producerOrdersForProfile,
+    profileUser?.role,
+    resolvedIsOwn,
+    sharerOrdersForProfile,
+  ]);
 
   const visibleOrdersForProfile = React.useMemo(
     () =>
@@ -1043,21 +1077,28 @@ export default function App() {
   const [createdProductDetails, setCreatedProductDetails] = React.useState<Record<string, ProductDetail>>({});
   const [useDemoProducts, setUseDemoProducts] = React.useState<boolean>(DEMO_MODE);
   const [groupOrders, setGroupOrders] = React.useState<GroupOrder[]>(DEMO_MODE ? mockGroupOrders : []);
+  const [userOrders, setUserOrders] = React.useState<GroupOrder[]>(DEMO_MODE ? mockGroupOrders : []);
+  React.useEffect(() => {
+    if (!DEMO_MODE) return;
+    setDemoOrders(groupOrders);
+    setUserOrders(groupOrders);
+  }, [groupOrders]);
   React.useEffect(() => {
     if (DEMO_MODE || !supabaseClient) return;
     let active = true;
     const loadOrders = async () => {
       try {
-        const [publicOrders, userOrders] = await Promise.all([
+        const [publicOrders, userOrdersResult] = await Promise.all([
           listPublicOrders(),
           user?.id ? listOrdersForUser(user.id) : Promise.resolve([]),
         ]);
         if (!active) return;
         const merged = new Map<string, GroupOrder>();
-        [...publicOrders, ...userOrders].forEach((order) => {
+        [...publicOrders, ...userOrdersResult].forEach((order) => {
           merged.set(order.id, order);
         });
         setGroupOrders(Array.from(merged.values()));
+        setUserOrders(userOrdersResult);
       } catch (error) {
         console.warn('Orders load error:', error);
       }
@@ -1935,7 +1976,8 @@ export default function App() {
       });
     } catch (error) {
       console.error('Payment finalize error:', error);
-      toast.error('Impossible de finaliser le paiement.');
+      const message = (error as Error)?.message ?? 'Impossible de finaliser le paiement.';
+      toast.error(message);
       return;
     }
 
@@ -2012,12 +2054,16 @@ export default function App() {
       producerId: firstProduct?.producerId ?? currentProducerId,
       producerName: firstProduct?.producerName ?? 'Producteur',
       sharerPercentage: orderData.sharerPercentage,
-      sharerQuantities: hasSharerSelection ? sharerQuantities : undefined,
-      minWeight: orderData.minWeight,
-      maxWeight: orderData.maxWeight,
-      orderedWeight: sharerSelectionWeight,
-      estimatedDeliveryDate,
-      pickupWindowWeeks,
+        sharerQuantities: hasSharerSelection ? sharerQuantities : undefined,
+        minWeight: orderData.minWeight,
+        maxWeight: orderData.maxWeight,
+        orderedWeight: sharerSelectionWeight,
+        deliveryFeeCents:
+          typeof orderData.deliveryFeeCents === 'number'
+            ? orderData.deliveryFeeCents
+            : eurosToCents(orderData.pickupDeliveryFee ?? 0),
+        estimatedDeliveryDate,
+        pickupWindowWeeks,
       deadline: orderData.deadline ?? now,
       pickupStreet: orderData.pickupStreet,
       pickupCity: orderData.pickupCity,
@@ -3264,6 +3310,7 @@ export default function App() {
                   viewer={viewer}
                   products={products}
                   groupOrders={groupOrders}
+                  userOrders={userOrders}
                   deck={deck}
                   deckSelectionIds={deckSelectionIds}
                   canSaveProduct={canSaveProduct}
@@ -3303,6 +3350,7 @@ export default function App() {
                 viewer={viewer}
                 products={products}
                 groupOrders={groupOrders}
+                userOrders={userOrders}
                 deck={deck}
                 deckSelectionIds={deckSelectionIds}
                 canSaveProduct={canSaveProduct}
@@ -3418,6 +3466,7 @@ export default function App() {
                 onClose={closeOrderView}
                 onOpenParticipantProfile={openSharerProfile}
                 onStartPurchase={handleStartPurchase}
+                supabaseClient={supabaseClient}
               />
             }
           />

@@ -103,6 +103,7 @@ export interface GroupOrder {
   minWeight: number;
   maxWeight: number;
   orderedWeight?: number;
+  deliveryFeeCents?: number;
   estimatedDeliveryDate?: Date;
   pickupWindowWeeks?: number;
   deadline: Date;
@@ -111,7 +112,17 @@ export interface GroupOrder {
   pickupPostcode?: string;
   pickupAddress: string;
   message: string;
-  status: 'open' | 'closed' | 'completed';
+  status:
+    | 'draft'
+    | 'open'
+    | 'locked'
+    | 'confirmed'
+    | 'preparing'
+    | 'prepared'
+    | 'delivered'
+    | 'distributed'
+    | 'finished'
+    | 'cancelled';
   visibility: 'public' | 'private';
   autoApproveParticipationRequests?: boolean;
   allowSharerMessages?: boolean;

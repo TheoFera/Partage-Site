@@ -140,12 +140,6 @@ const producerCategoryOptions: Array<{ id: string; label: string }> = [
   { id: 'autre', label: 'Autre' },
 ];
 
-const statusLabels: Record<GroupOrder['status'], string> = {
-  open: 'Ouverte',
-  closed: 'Fermée',
-  completed: 'Terminée',
-};
-
 const DEFAULT_PROFILE_AVATAR =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -261,21 +255,24 @@ export function ProfileView({
         order.producerName ||
         order.sharerName ||
         '';
-      return {
-        id: order.id,
-        orderId: order.orderCode ?? order.id,
-        title: order.title,
-        location,
-        tags: [],
-        products: sortedProducts,
-        variant: 'order',
-        sharerName: order.sharerName || order.producerName,
-        minWeight: order.minWeight,
-        maxWeight: order.maxWeight,
-        orderedWeight: order.orderedWeight,
-        deadline: deadlineDate,
-        avatarUrl: sortedProducts[0]?.imageUrl,
-      };
+        return {
+          id: order.id,
+          orderId: order.orderCode ?? order.id,
+          title: order.title,
+          location,
+          tags: [],
+          products: sortedProducts,
+          variant: 'order',
+          status: order.status,
+          sharerName: order.sharerName || order.producerName,
+          sharerPercentage: order.sharerPercentage,
+          minWeight: order.minWeight,
+          maxWeight: order.maxWeight,
+          orderedWeight: order.orderedWeight,
+          deliveryFeeCents: order.deliveryFeeCents,
+          deadline: deadlineDate,
+          avatarUrl: sortedProducts[0]?.imageUrl,
+        };
     });
   }, [orders, isOwnProfile]);
 
@@ -442,6 +439,7 @@ export function ProfileView({
                 onToggleSelection={selectionActionsEnabled ? handleToggleSelection : undefined}
                 onOpenProduct={handleOpenProduct}
                 onOpenOrder={onOpenOrder}
+                orderActionLabel="Consulter"
                 showSelectionControl={selectionActionsEnabled}
               />
             </div>

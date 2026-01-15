@@ -77,10 +77,13 @@ export function ClientSwipeView({
           tags: [order.sharerName, productCountLabel].filter(Boolean) as string[],
           products: sortedProducts,
           variant: 'order',
+          status: order.status,
           sharerName: order.sharerName,
+          sharerPercentage: order.sharerPercentage,
           minWeight: order.minWeight,
           maxWeight: order.maxWeight,
           orderedWeight: order.orderedWeight,
+          deliveryFeeCents: order.deliveryFeeCents,
           deadline: order.deadline,
           avatarUrl: sortedProducts[0]?.imageUrl,
         };
