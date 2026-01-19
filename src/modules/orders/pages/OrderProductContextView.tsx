@@ -1,11 +1,11 @@
 import React from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, MapPin, Package, Percent, Users } from 'lucide-react';
-import { formatEurosFromCents } from '../lib/money';
-import { getOrderFullByCode } from '../services/orders';
-import { getLotByCode } from '../data/productsProvider';
-import { ImageWithFallback } from './figma/ImageWithFallback';
-import type { OrderFull } from '../types/orders';
+import { formatEurosFromCents } from '../../../shared/lib/money';
+import { getOrderFullByCode } from '../api/orders';
+import { getLotByCode } from '../../products/api/productsProvider';
+import { ImageWithFallback } from '../../../shared/ui/ImageWithFallback';
+import type { OrderFull } from '../types';
 
 type RouteParams = {
   productSlug: string;

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { DbLot, DbLotPriceBreakdown, RepartitionPoste } from '../types';
-import { eurosToCents } from './money';
+import type { DbLot, DbLotPriceBreakdown, RepartitionPoste } from '../../../shared/types';
+import { eurosToCents } from '../../../shared/lib/money';
 
 export const fetchLotByLotCode = async (
   client: SupabaseClient,

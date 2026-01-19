@@ -2,15 +2,15 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { DeckCard, GroupOrder, Product } from '../types';
-import { ProductGroupContainer, ProductGroupDescriptor } from './ProductsLanding';
+import { DeckCard, GroupOrder, Product } from '../../../shared/types';
+import { ProductGroupContainer, ProductGroupDescriptor } from '../components/ProductGroup';
 import {
   CARD_WIDTH,
   CARD_GAP,
   MAX_VISIBLE_CARDS,
   MIN_VISIBLE_CARDS,
   CONTAINER_SIDE_PADDING,
-} from '../constants/cards';
+} from '../../../shared/constants/cards';
 
 const defaultIcon = L.icon({
   iconUrl: new URL('leaflet/dist/images/marker-icon.png', import.meta.url).toString(),

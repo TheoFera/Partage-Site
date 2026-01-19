@@ -1,8 +1,8 @@
 import React from 'react';
 import { CheckCircle2, Share2, Sparkles, Users } from 'lucide-react';
-import type { GroupOrder, OrderPurchaseDraft } from '../types';
+import type { GroupOrder, OrderPurchaseDraft } from '../../../shared/types';
 import './OrderShareGainView.css';
-import { eurosToCents, formatEurosFromCents } from '../lib/money';
+import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 
 interface OrderShareGainViewProps {
   order: GroupOrder;

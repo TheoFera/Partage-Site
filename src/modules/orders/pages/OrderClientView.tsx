@@ -15,16 +15,16 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import type { User, Product } from '../types';
+import type { User, Product } from '../../../shared/types';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { ProductResultCard } from './ProductsLanding';
-import { Avatar } from './Avatar';
-import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
+import { ProductResultCard } from '../../products/components/ProductGroup';
+import { Avatar } from '../../../shared/ui/Avatar';
+import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../../../shared/constants/cards';
 import { toast } from 'sonner';
-import { ImageWithFallback } from './figma/ImageWithFallback';
+import { ImageWithFallback } from '../../../shared/ui/ImageWithFallback';
 import './OrderClientView.css';
-import { eurosToCents, formatEurosFromCents } from '../lib/money';
-import { getOrderStatusLabel, getOrderStatusProgress } from '../lib/orderStatus';
+import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
+import { getOrderStatusLabel, getOrderStatusProgress } from '../utils/orderStatus';
 import {
   addItem,
   approveParticipation,
@@ -37,8 +37,8 @@ import {
   updateOrderParticipantSettings,
   updateOrderStatus,
   updateOrderVisibility,
-} from '../services/orders';
-import { centsToEuros, type OrderFull, type OrderStatus } from '../types/orders';
+} from '../api/orders';
+import { centsToEuros, type OrderFull, type OrderStatus } from '../types';
 
 interface OrderClientViewProps {
   onClose: () => void;

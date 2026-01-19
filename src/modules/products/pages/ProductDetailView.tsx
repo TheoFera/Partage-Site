@@ -21,17 +21,17 @@ import {
   Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Avatar } from './Avatar';
-import { ImageWithFallback } from './figma/ImageWithFallback';
-import { ProductImageUploader } from './ProductImageUploader';
-import { ProductResultCard } from './ProductsLanding';
+import { Avatar } from '../../../shared/ui/Avatar';
+import { ImageWithFallback } from '../../../shared/ui/ImageWithFallback';
+import { ProductImageUploader } from '../components/ProductImageUploader';
+import { ProductResultCard } from '../components/ProductGroup';
 import './ProductDetailView.css';
-import { generateBase62Code } from '../lib/codeGenerator';
-import { centsToEuros, eurosToCents, formatEurosFromCents } from '../lib/money';
-import { formatUnitWeightLabel } from '../lib/weight';
-import { fetchLotBreakdown, saveProducerLotBreakdown } from '../lib/pricing';
+import { generateBase62Code } from '../utils/codeGenerator';
+import { centsToEuros, eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
+import { formatUnitWeightLabel } from '../utils/weight';
+import { fetchLotBreakdown, saveProducerLotBreakdown } from '../utils/pricing';
 import { PRODUCT_CATEGORIES } from '../constants/productCategories';
-import { DEMO_MODE } from '../data/productsProvider';
+import { DEMO_MODE } from '../../../shared/config/demoMode';
 import {
   CreateProductPayload,
   DbLotLabel,
@@ -47,7 +47,7 @@ import {
   ProductionLot,
   RepartitionPoste,
   TimelineStep,
-} from '../types';
+} from '../../../shared/types';
 
 interface ProductDetailViewProps {
   product: Product;

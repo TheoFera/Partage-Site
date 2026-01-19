@@ -1,4 +1,4 @@
-import type { OrderStatus } from '../types/orders';
+import type { OrderStatus } from '../types';
 
 export const ORDER_STATUS_STEPS = [
   'open',

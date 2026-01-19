@@ -1,6 +1,6 @@
 import React from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { CreateProductPayload, Product, ProductDetail, User } from '../types';
+import { CreateProductPayload, Product, ProductDetail, User } from '../../../shared/types';
 import { ProductDetailView } from './ProductDetailView';
 import { PRODUCT_CATEGORIES } from '../constants/productCategories';
 

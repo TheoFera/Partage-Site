@@ -1,7 +1,7 @@
 import React from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { toast } from 'sonner';
-import { Avatar } from './Avatar';
+import { Avatar } from '../../../shared/ui/Avatar';
 import {
   clampOffset,
   exportWebp,
@@ -11,7 +11,7 @@ import {
   renderCroppedCanvas,
   type Offset,
   type PreparedImage,
-} from '../lib/imageProcessing';
+} from '../../../shared/lib/imageProcessing';
 
 type AvatarUploaderProps = {
   supabaseClient: SupabaseClient | null;

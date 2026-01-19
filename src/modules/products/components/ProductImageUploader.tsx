@@ -9,7 +9,7 @@ import {
   renderCroppedCanvasRect,
   type Offset,
   type PreparedImage,
-} from '../lib/imageProcessing';
+} from '../../../shared/lib/imageProcessing';
 
 type ProductImageUploaderProps = {
   currentUrl?: string | null;

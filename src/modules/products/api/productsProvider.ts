@@ -1,14 +1,14 @@
 ﻿import type { SupabaseClient } from '@supabase/supabase-js';
-import { getSupabaseClient } from '../lib/supabaseClient';
-import { centsToEuros } from '../lib/money';
-import { fetchLotByLotCode } from '../lib/pricing';
-import { mockProducts } from './mockData';
-import { buildDefaultProductDetail, mockProductDetails } from './mockProductDetails';
+import { getSupabaseClient } from '../../../shared/lib/supabaseClient';
+import { centsToEuros } from '../../../shared/lib/money';
+import { fetchLotByLotCode } from '../utils/pricing';
+import { mockProducts } from '../../../data/fixtures/mockData';
+import { buildDefaultProductDetail, mockProductDetails } from '../../../data/fixtures/mockProductDetails';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
   PRODUCER_LABELS_TABLE,
   PRODUCER_LABELS_YEAR_COLUMN,
-} from './producerLabels';
+} from '../../../shared/constants/producerLabels';
 import type {
   Avis,
   DbLot,
@@ -31,16 +31,8 @@ import type {
   RepartitionPoste,
   RepartitionValeur,
   TimelineStep,
-} from '../types';
-
-export const DEMO_MODE = (() => {
-  const raw = import.meta.env.VITE_DEMO_MODE;
-  if (raw === undefined || raw === null) return true;
-  const normalized = String(raw).trim().toLowerCase();
-  if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
-  if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
-  return true;
-})();
+} from '../../../shared/types';
+import { DEMO_MODE } from '../../../shared/config/demoMode';
 
 const PRODUCT_IMAGE_BUCKET = 'product-images';
 const JOURNEY_IMAGE_BUCKET = import.meta.env.VITE_PRODUCT_JOURNEY_BUCKET ?? 'product-journey';

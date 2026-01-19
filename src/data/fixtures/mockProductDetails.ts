@@ -1,4 +1,4 @@
-import { Product, ProductDetail } from '../types';
+import { Product, ProductDetail } from '../../shared/types';
 
 export const mockProductDetails: Record<string, ProductDetail> = {
   '2': {

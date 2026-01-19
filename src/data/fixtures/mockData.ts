@@ -1,4 +1,4 @@
-import { Product, GroupOrder, User } from '../types';
+import { Product, GroupOrder, User } from '../../shared/types';
 
 const demoImage = (name: string) => {
   const base = import.meta.env.BASE_URL ?? '/';

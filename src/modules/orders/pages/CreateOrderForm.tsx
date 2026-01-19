@@ -1,14 +1,14 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DeckCard, DeliveryDay, DeliveryLeadType, User } from '../types';
+import { DeckCard, DeliveryDay, DeliveryLeadType, User } from '../../../shared/types';
 import { Calendar, MapPin, Package, Percent, ChevronLeft, ChevronRight } from 'lucide-react';
-import { CARD_WIDTH, CARD_HEIGHT, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
-import { ImageWithFallback } from './figma/ImageWithFallback';
-import { ProductResultCard } from './ProductsLanding';
-import { eurosToCents, formatEurosFromCents } from '../lib/money';
+import { CARD_WIDTH, CARD_HEIGHT, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../../../shared/constants/cards';
+import { ImageWithFallback } from '../../../shared/ui/ImageWithFallback';
+import { ProductResultCard } from '../../products/components/ProductGroup';
+import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { toast } from 'sonner';
-import { createOrder } from '../services/orders';
-import { DEMO_MODE } from '../data/productsProvider';
+import { createOrder } from '../api/orders';
+import { DEMO_MODE } from '../../../shared/config/demoMode';
 
 interface CreateOrderFormProps {
   products: DeckCard[];

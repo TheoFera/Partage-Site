@@ -1,8 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { DEMO_MODE } from '../data/productsProvider';
-import { getSupabaseClient } from '../lib/supabaseClient';
-import { mockGroupOrders } from '../data/mockData';
-import type { DbProduct, GroupOrder, Product, ProductListingRow } from '../types';
+import { DEMO_MODE } from '../../../shared/config/demoMode';
+import { getSupabaseClient } from '../../../shared/lib/supabaseClient';
+import { mockGroupOrders } from '../../../data/fixtures/mockData';
+import type { DbProduct, GroupOrder, Product, ProductListingRow } from '../../../shared/types';
 import {
   centsToEuros,
   type DbOrder,
@@ -26,7 +26,7 @@ import {
   type ProfileSummary,
   type ShareMode,
   eurosToCents,
-} from '../types/orders';
+} from '../types';
 
 const PRODUCT_IMAGE_BUCKET = 'product-images';
 
@@ -1521,7 +1521,73 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus): P
     p_order_id: orderId,
     p_status: status,
   });
-  if (rpcError) throw rpcError;
+  if (rpcError) {
+    const isStatusDatesConstraint =
+      rpcError.code === '23514' &&
+      typeof rpcError.message === 'string' &&
+      rpcError.message.includes('orders_status_dates_consistency_check');
+    if (!isStatusDatesConstraint) throw rpcError;
+
+    // Fallback when the RPC does not populate status date columns expected by the constraint.
+    const { data: orderRow, error: orderError } = await client
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .maybeSingle();
+    if (orderError || !orderRow) throw orderError ?? rpcError;
+
+    const statusDateColumns: Partial<Record<OrderStatus, string>> = {
+      locked: 'locked_at',
+      confirmed: 'confirmed_at',
+      preparing: 'preparing_at',
+      prepared: 'prepared_at',
+      delivered: 'delivered_at',
+      distributed: 'distributed_at',
+      finished: 'finished_at',
+      cancelled: 'cancelled_at',
+    };
+    const statusOrder: OrderStatus[] = [
+      'locked',
+      'confirmed',
+      'preparing',
+      'prepared',
+      'delivered',
+      'distributed',
+      'finished',
+    ];
+    const now = new Date().toISOString();
+    const updates: Record<string, unknown> = { status };
+    if ('updated_at' in orderRow) {
+      updates.updated_at = now;
+    }
+    const statusIndex = statusOrder.indexOf(status);
+    if (status === 'cancelled') {
+      const column = statusDateColumns.cancelled;
+      if (column && column in orderRow && (orderRow as Record<string, unknown>)[column] == null) {
+        updates[column] = now;
+      }
+    } else if (statusIndex >= 0) {
+      for (let i = 0; i <= statusIndex; i += 1) {
+        const step = statusOrder[i];
+        const column = statusDateColumns[step];
+        if (!column) continue;
+        if (!(column in orderRow)) continue;
+        if ((orderRow as Record<string, unknown>)[column] == null) {
+          updates[column] = now;
+        }
+      }
+    }
+    const { data, error } = await client
+      .from('orders')
+      .update(updates)
+      .eq('id', orderId)
+      .select('status')
+      .maybeSingle();
+    if (error) throw error;
+    if (data?.status) {
+      return data.status as OrderStatus;
+    }
+  }
 
   const { data, error } = await client.from('orders').select('status').eq('id', orderId).maybeSingle();
   if (error) throw error;

@@ -26,16 +26,16 @@ import {
   ProducerLabelDetail,
   Product,
   User,
-} from '../types';
-import { Avatar } from './Avatar';
-import { AvatarUploader } from './AvatarUploader';
-import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from './ProductsLanding';
+} from '../../../shared/types';
+import { Avatar } from '../../../shared/ui/Avatar';
+import { AvatarUploader } from '../components/AvatarUploader';
+import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from '../../products/components/ProductGroup';
 import { toast } from 'sonner';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
   PRODUCER_LABELS_TABLE,
   PRODUCER_LABELS_YEAR_COLUMN,
-} from '../data/producerLabels';
+} from '../../../shared/constants/producerLabels';
 
 type TabKey = 'products' | 'orders' | 'selection';
 

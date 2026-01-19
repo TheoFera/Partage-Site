@@ -1,7 +1,7 @@
 import React from 'react';
-import { GroupOrder, Product } from '../types';
+import { GroupOrder, Product } from '../../../shared/types';
 import { Check, X } from 'lucide-react';
-import { ProductGroupContainer, ProductGroupDescriptor } from './ProductsLanding';
+import { ProductGroupContainer, ProductGroupDescriptor } from '../components/ProductGroup';
 
 interface ClientSwipeViewProps {
   products: Product[];

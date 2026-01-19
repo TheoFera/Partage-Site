@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { Facebook, Instagram, Linkedin, Link as LinkIcon, Award, Scale, Handshake, Search } from 'lucide-react';
-import './InfoPages.css';
+import '../styles/InfoPages.css';
 import './AboutUsView.css';
 
 export function AboutUsView() {

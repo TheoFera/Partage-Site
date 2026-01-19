@@ -2,27 +2,27 @@ import React from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { SupabaseClient, User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { Check, LogOut, Pencil, Share2 } from 'lucide-react';
-import { Header, type SearchSuggestion } from './components/Header';
-import { Navigation } from './components/Navigation';
-import { CreateOrderForm } from './components/CreateOrderForm';
-import { ProfileView } from './components/ProfileView';
-import { MessagesView } from './components/MessagesView';
-import { AddProductForm } from './components/AddProductForm';
-import { ClientSwipeView } from './components/ClientSwipeView';
-import { FiltersPopover } from './components/FiltersPopover';
-import { NotificationsPopover } from './components/NotificationsPopover';
-import { ProductsLanding } from './components/ProductsLanding';
-import { HowItWorksView } from './components/HowItWorksView';
-import { AboutUsView } from './components/AboutUsView';
-import { MapView } from './components/MapView';
-import { OrderClientView } from './components/OrderClientView';
-import { OrderPaymentView } from './components/OrderPaymentView';
-import { OrderShareGainView } from './components/OrderShareGainView';
-import { AuthPage } from './components/AuthPage';
-import { ShareOverlay } from './components/ShareOverlay';
-import { mockProducts, mockUser, mockGroupOrders } from './data/mockData';
-import { ProductDetailView } from './components/ProductDetailView';
-import { OrderProductContextView } from './components/OrderProductContextView';
+import { Header, type SearchSuggestion } from './shared/ui/Header';
+import { Navigation } from './shared/ui/Navigation';
+import { CreateOrderForm } from './modules/orders/pages/CreateOrderForm';
+import { ProfileView } from './modules/profile/pages/ProfileView';
+import { MessagesView } from './modules/messages/pages/MessagesView';
+import { AddProductForm } from './modules/products/pages/AddProductForm';
+import { ClientSwipeView } from './modules/products/pages/ClientSwipeView';
+import { FiltersPopover } from './shared/ui/FiltersPopover';
+import { NotificationsPopover } from './shared/ui/NotificationsPopover';
+import { ProductsLanding } from './modules/products/pages/ProductsLanding';
+import { HowItWorksView } from './modules/marketing/pages/HowItWorksView';
+import { AboutUsView } from './modules/marketing/pages/AboutUsView';
+import { MapView } from './modules/products/pages/MapView';
+import { OrderClientView } from './modules/orders/pages/OrderClientView';
+import { OrderPaymentView } from './modules/orders/pages/OrderPaymentView';
+import { OrderShareGainView } from './modules/orders/pages/OrderShareGainView';
+import { AuthPage } from './modules/auth/pages/AuthPage';
+import { ShareOverlay } from './shared/ui/ShareOverlay';
+import { mockProducts, mockUser, mockGroupOrders } from './data/fixtures/mockData';
+import { ProductDetailView } from './modules/products/pages/ProductDetailView';
+import { OrderProductContextView } from './modules/orders/pages/OrderProductContextView';
 import {
   CreateProductPayload,
   Product,
@@ -35,10 +35,11 @@ import {
   DeliveryDay,
   LegalEntity,
   OrderPurchaseDraft,
-} from './types';
-import { getSupabaseClient } from './lib/supabaseClient';
-import { eurosToCents, formatEurosFromCents } from './lib/money';
-import { DEMO_MODE, getLotByCode, getProductByCode, listProducts } from './data/productsProvider';
+} from './shared/types';
+import { getSupabaseClient } from './shared/lib/supabaseClient';
+import { eurosToCents, formatEurosFromCents } from './shared/lib/money';
+import { DEMO_MODE } from './shared/config/demoMode';
+import { getLotByCode, getProductByCode, listProducts } from './modules/products/api/productsProvider';
 import {
   addItem,
   createPaymentStub,
@@ -47,12 +48,12 @@ import {
   listPublicOrders,
   requestParticipation,
   setDemoOrders,
-} from './services/orders';
+} from './modules/orders/api/orders';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
   PRODUCER_LABELS_TABLE,
   PRODUCER_LABELS_YEAR_COLUMN,
-} from './data/producerLabels';
+} from './shared/constants/producerLabels';
 import { toast, Toaster } from 'sonner';
 
 const tabRoutes = {

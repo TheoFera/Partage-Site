@@ -1,6 +1,6 @@
 import React from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { ImageWithFallback } from './figma/ImageWithFallback';
+import { ImageWithFallback } from './ImageWithFallback';
 
 type AvatarProps = {
   path?: string | null;

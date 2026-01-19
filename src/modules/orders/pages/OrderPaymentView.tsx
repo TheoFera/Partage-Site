@@ -1,8 +1,8 @@
 import React from 'react';
 import { ArrowLeft, CreditCard, ShieldCheck, Sparkles } from 'lucide-react';
-import type { GroupOrder, OrderPurchaseDraft } from '../types';
+import type { GroupOrder, OrderPurchaseDraft } from '../../../shared/types';
 import './OrderPaymentView.css';
-import { eurosToCents, formatEurosFromCents } from '../lib/money';
+import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 
 interface OrderPaymentViewProps {
   order: GroupOrder;

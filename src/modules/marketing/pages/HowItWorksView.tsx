@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { Link as LinkIcon, Award, Scale, Handshake, Search } from 'lucide-react';
-import './InfoPages.css';
+import '../styles/InfoPages.css';
 import './HowItWorksView.css';
 
 type CtaVariant = 'primary' | 'secondary' | 'ghost';
