@@ -166,6 +166,7 @@ export type DbPayment = {
     | 'partially_refunded';
   amount_cents: number;
   fee_cents: number;
+  fee_vat_cents?: number | null;
   refunded_amount_cents: number;
   currency: string;
   paid_at: string | null;
@@ -174,6 +175,40 @@ export type DbPayment = {
   raw: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+};
+
+export type InvoiceSerie = 'PROD_CLIENT' | 'PLAT_PROD';
+
+export type DbFacture = {
+  id: string;
+  serie: InvoiceSerie;
+  producer_profile_id: string;
+  order_id: string;
+  payment_id: string | null;
+  client_profile_id: string | null;
+  numero: string;
+  issued_at: string;
+  currency: string;
+  total_ttc_cents: number;
+  total_ht_cents: number;
+  total_tva_cents: number;
+  mention_tva: string | null;
+  pdf_path: string | null;
+  status: 'draft' | 'issued' | 'sent' | 'cancelled';
+  created_at: string;
+  updated_at: string;
+};
+
+export type DbFactureLigne = {
+  id: string;
+  facture_id: string;
+  label: string;
+  quantity: number;
+  unit_ttc_cents: number;
+  total_ttc_cents: number;
+  vat_rate: number;
+  total_ht_cents: number;
+  total_tva_cents: number;
 };
 
 export type DbLotReservation = {
@@ -350,6 +385,7 @@ export type Payment = {
   status: DbPayment['status'];
   amountCents: number;
   feeCents: number;
+  feeVatCents: number;
   refundedAmountCents: number;
   currency: string;
   paidAt: Date | null;
@@ -358,6 +394,38 @@ export type Payment = {
   raw: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
+};
+
+export type Facture = {
+  id: string;
+  serie: InvoiceSerie;
+  producerProfileId: string;
+  orderId: string;
+  paymentId: string | null;
+  clientProfileId: string | null;
+  numero: string;
+  issuedAt: Date;
+  currency: string;
+  totalTtcCents: number;
+  totalHtCents: number;
+  totalTvaCents: number;
+  mentionTva: string | null;
+  pdfPath: string | null;
+  status: DbFacture['status'];
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type FactureLigne = {
+  id: string;
+  factureId: string;
+  label: string;
+  quantity: number;
+  unitTtcCents: number;
+  totalTtcCents: number;
+  vatRate: number;
+  totalHtCents: number;
+  totalTvaCents: number;
 };
 
 export type LotReservation = {

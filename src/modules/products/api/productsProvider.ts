@@ -485,6 +485,7 @@ const mapProductDetail = (params: {
     productId: product.id,
     name: product.name,
     category: product.category,
+    vatRate: toOptionalNumber(productRow.vat_rate),
     shortDescription: product.description,
     longDescription: productRow.description ?? product.description,
     productImage: imageUrl
@@ -577,6 +578,7 @@ const mapProductRowToProduct = (row: DbProduct, selectedLot: DbLot | null, clien
     inStock: Boolean(selectedLot && quantity > 0),
     measurement,
     weightKg: row.unit_weight_kg ?? undefined,
+    vatRate: toOptionalNumber(row.vat_rate),
   };
 };
 

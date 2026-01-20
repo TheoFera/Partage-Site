@@ -99,6 +99,8 @@ const LABEL_DESCRIPTIONS: Record<string, string> = {
   'frais controle': 'Respect du froid et controles reguliers.',
 };
 
+const DEFAULT_VAT_RATE = 0.055;
+
 const mapMarkerIcon = L.icon({
   iconUrl: new URL('leaflet/dist/images/marker-icon.png', import.meta.url).toString(),
   iconRetinaUrl: new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).toString(),
@@ -468,7 +470,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   producerProfileLabels,
 }) => {
   const isCreateMode = mode === 'create';
-  const [draft, setDraft] = React.useState<ProductDetail>(detail);
+  const [draft, setDraft] = React.useState<ProductDetail>(() => ({
+    ...detail,
+    vatRate: detail.vatRate ?? DEFAULT_VAT_RATE,
+  }));
   const [isFollowing, setIsFollowing] = React.useState(false);
   const [editMode, setEditMode] = React.useState(isCreateMode);
   const [lotMode, setLotMode] = React.useState(false);
@@ -716,7 +721,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [detail.repartitionValeur?.postes, selectedLotId]);
 
   React.useEffect(() => {
-    setDraft(detail);
+    setDraft({ ...detail, vatRate: detail.vatRate ?? DEFAULT_VAT_RATE });
   }, [detail]);
 
   React.useEffect(() => {
@@ -847,6 +852,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [product.measurement, product.unit, product.weightKg]);
 
   const display = editMode ? draft : detail;
+  const resolvedVatRate = (editMode ? draft.vatRate : detail.vatRate) ?? DEFAULT_VAT_RATE;
   const hasOrders = ordersWithProduct.length > 0;
   const summaryOrdersLabel = hasOrders
     ? `${ordersWithProduct.length} commande${ordersWithProduct.length > 1 ? 's' : ''} disponible`
@@ -2043,6 +2049,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         : Number.isFinite(Number(localWeightKg))
           ? Number(localWeightKg)
           : null;
+    const vatRateValue = Number.isFinite(Number(draft.vatRate)) ? Number(draft.vatRate) : DEFAULT_VAT_RATE;
     if (priceCents <= 0 && !isCreateMode) {
       toast.error('Ajoutez des postes de repartition pour calculer le prix.');
       return null;
@@ -2096,6 +2103,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         : undefined;
     const detailPayload: ProductDetail = {
       ...draft,
+      vatRate: vatRateValue,
       productId: productCode,
       name,
       category,
@@ -2175,6 +2183,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         inStock: inStockValue,
         measurement: localMeasurement,
         weightKg: weightValue && weightValue > 0 ? weightValue : undefined,
+        vatRate: vatRateValue,
       } as CreateProductPayload['product'],
       detail: detailPayload,
       imageFile,
@@ -2184,7 +2193,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   };
 
   const resetCreateForm = () => {
-    setDraft(detail);
+    setDraft({ ...detail, vatRate: detail.vatRate ?? DEFAULT_VAT_RATE });
     setLocalMeasurement(product.measurement);
     setLocalUnit(product.unit);
     setLocalWeightKg(product.weightKg ?? '');
@@ -2244,6 +2253,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         : Number.isFinite(Number(localWeightKg))
           ? Number(localWeightKg)
           : null;
+    const vatRateValue = Number.isFinite(Number(draft.vatRate)) ? Number(draft.vatRate) : DEFAULT_VAT_RATE;
     if (saleUnit === 'unit' && (!weightValue || weightValue <= 0)) {
       toast.error('Ajoutez un poids unitaire valide.');
       return;
@@ -2265,6 +2275,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
           packaging: packagingValue,
           sale_unit: saleUnit,
           unit_weight_kg: saleUnit === 'unit' ? weightValue : null,
+          vat_rate: vatRateValue,
         })
         .eq('id', productRow.id);
       if (updateError) {
@@ -2837,6 +2848,28 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
             </p>
           )}
         </div>
+        {isOwner && editMode ? (
+          <div className="pd-row pd-row--wrap pd-gap-sm">
+            <div className="pd-stack pd-stack--xs">
+              <p className="pd-label">Taux de TVA</p>
+              <select
+                className="pd-select"
+                value={resolvedVatRate}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    vatRate: Number(e.target.value),
+                  }))
+                }
+              >
+                <option value={0}>0%</option>
+                <option value={0.055}>5,5%</option>
+                <option value={0.1}>10%</option>
+                <option value={0.2}>20%</option>
+              </select>
+            </div>
+          </div>
+        ) : null}
         {isLotManagement ? (
           <div className="pd-card pd-stack pd-stack--md">
             <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">

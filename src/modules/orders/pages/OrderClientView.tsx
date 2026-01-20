@@ -29,16 +29,20 @@ import {
   addItem,
   approveParticipation,
   createPaymentStub,
+  fetchParticipantInvoices,
+  fetchProducerInvoices,
+  getInvoiceDownloadUrl,
   getOrderFullByCode,
   rejectParticipation,
   requestParticipation,
   setParticipantPickupSlot,
+  updatePaymentStatus,
   updateParticipantsVisibility,
   updateOrderParticipantSettings,
   updateOrderStatus,
   updateOrderVisibility,
 } from '../api/orders';
-import { centsToEuros, type OrderFull, type OrderStatus } from '../types';
+import { centsToEuros, type Facture, type OrderFull, type OrderStatus } from '../types';
 
 interface OrderClientViewProps {
   onClose: () => void;
@@ -251,8 +255,41 @@ export function OrderClientView({
   const [participantsPanelOpen, setParticipantsPanelOpen] = React.useState(false);
   const participantsPanelRef = React.useRef<HTMLDivElement | null>(null);
   const participantsButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const [participantInvoices, setParticipantInvoices] = React.useState<Facture[]>([]);
+  const [producerInvoices, setProducerInvoices] = React.useState<Facture[]>([]);
+  const [isInvoiceLoading, setIsInvoiceLoading] = React.useState(false);
 
   const isAuthenticated = Boolean(currentUser);
+
+  const loadInvoices = React.useCallback(
+    async (orderId: string, producerProfileId?: string | null) => {
+      if (!currentUser?.id) {
+        setParticipantInvoices([]);
+        setProducerInvoices([]);
+        return;
+      }
+      setIsInvoiceLoading(true);
+      try {
+        const isProducerForOrder =
+          Boolean(producerProfileId) &&
+          (currentUser.id === producerProfileId || currentUser.producerId === producerProfileId);
+        const [participantData, producerData] = await Promise.all([
+          fetchParticipantInvoices(orderId, currentUser.id),
+          isProducerForOrder && producerProfileId
+            ? fetchProducerInvoices(orderId, producerProfileId)
+            : Promise.resolve([]),
+        ]);
+        setParticipantInvoices(participantData);
+        setProducerInvoices(producerData);
+      } catch (error) {
+        console.error('Invoice load error:', error);
+        toast.error('Impossible de charger les factures.');
+      } finally {
+        setIsInvoiceLoading(false);
+      }
+    },
+    [currentUser]
+  );
 
   const loadOrder = React.useCallback(async () => {
     if (!orderCode) return;
@@ -270,13 +307,14 @@ export function OrderClientView({
       setQuantities(next);
       setParticipantsVisibility(data.order.participantsVisibility);
       setParticipantsPanelOpen(false);
+      await loadInvoices(data.order.id, data.order.producerProfileId);
     } catch (error) {
       console.error('Order load error:', error);
       setLoadError('Impossible de charger la commande.');
     } finally {
       setIsLoading(false);
     }
-  }, [orderCode]);
+  }, [orderCode, loadInvoices]);
 
   React.useEffect(() => {
     loadOrder();
@@ -354,6 +392,8 @@ const sharerAvatarUpdatedAt =
   const myParticipant = currentUser
     ? orderFullValue.participants.find((participant) => participant.profileId === currentUser.id)
     : undefined;
+  const participantInvoice = participantInvoices[0] ?? null;
+  const producerInvoice = producerInvoices[0] ?? null;
   const producerProfileMeta =
     order.producerProfileId && order.producerProfileId !== ''
       ? profiles[order.producerProfileId]
@@ -781,11 +821,15 @@ const sharerAvatarUpdatedAt =
       setOrderFull(refreshed);
       const refreshedParticipant = refreshed.participants.find((p) => p.id === participant.id);
       if (refreshedParticipant) {
-        await createPaymentStub({
+        const payment = await createPaymentStub({
           orderId: order.id,
           participantId: refreshedParticipant.id,
           amountCents: refreshedParticipant.totalAmountCents,
         });
+        await updatePaymentStatus(payment.id, 'paid');
+        const updated = await getOrderFullByCode(order.orderCode);
+        setOrderFull(updated);
+        await loadInvoices(updated.order.id, updated.order.producerProfileId);
       }
       toast.success('Paiement initie (stub).');
     } catch (error) {
@@ -861,6 +905,20 @@ const sharerAvatarUpdatedAt =
       toast.error('Impossible de selectionner ce creneau.');
     } finally {
       setIsWorking(false);
+    }
+  };
+
+  const handleInvoiceDownload = async (invoice: Facture) => {
+    try {
+      const url = await getInvoiceDownloadUrl(invoice);
+      if (!url) {
+        toast.info('PDF en cours de generation.');
+        return;
+      }
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      console.error('Invoice download error:', error);
+      toast.error('Impossible de telecharger la facture.');
     }
   };
 
@@ -1599,6 +1657,50 @@ const sharerAvatarUpdatedAt =
                     Ton inscription doit être acceptée pour obtenir un code.
                   </p>
                 )}
+              </div>
+            )}
+            {participantInvoice && (
+              <div className="order-client-view__pickup-code-card">
+                <p className="order-client-view__pickup-code-label">
+                  Votre facture :
+                  <span className="order-client-view__pickup-code">{participantInvoice.numero}</span>
+                </p>
+                <p className="order-client-view__pickup-code-label">
+                  Total TTC :{' '}
+                  <span className="order-client-view__pickup-code">
+                    {formatEurosFromCents(participantInvoice.totalTtcCents)}
+                  </span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleInvoiceDownload(participantInvoice)}
+                  className="order-client-view__purchase-button"
+                  disabled={!participantInvoice.pdfPath || isInvoiceLoading}
+                >
+                  {participantInvoice.pdfPath ? 'Telecharger (PDF)' : 'PDF en cours de generation'}
+                </button>
+              </div>
+            )}
+            {producerInvoice && (
+              <div className="order-client-view__pickup-code-card">
+                <p className="order-client-view__pickup-code-label">
+                  Facture producteur :
+                  <span className="order-client-view__pickup-code">{producerInvoice.numero}</span>
+                </p>
+                <p className="order-client-view__pickup-code-label">
+                  Total TTC :{' '}
+                  <span className="order-client-view__pickup-code">
+                    {formatEurosFromCents(producerInvoice.totalTtcCents)}
+                  </span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleInvoiceDownload(producerInvoice)}
+                  className="order-client-view__purchase-button"
+                  disabled={!producerInvoice.pdfPath || isInvoiceLoading}
+                >
+                  {producerInvoice.pdfPath ? 'Telecharger (PDF)' : 'PDF en cours de generation'}
+                </button>
               </div>
             )}
 

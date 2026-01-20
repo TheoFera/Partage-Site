@@ -48,6 +48,7 @@ import {
   listPublicOrders,
   requestParticipation,
   setDemoOrders,
+  updatePaymentStatus,
 } from './modules/orders/api/orders';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
@@ -442,6 +443,7 @@ type LegalEntityRow = {
   legal_name: string;
   siret: string;
   vat_number: string | null;
+  vat_regime?: string | null;
   entity_type: string;
   producer_category?: string | null;
   iban?: string | null;
@@ -505,6 +507,7 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   legalName: row.legal_name,
   siret: row.siret,
   vatNumber: row.vat_number ?? undefined,
+  vatRegime: (row.vat_regime as LegalEntity['vatRegime']) ?? 'unknown',
   entityType: (row.entity_type as LegalEntity['entityType']) ?? 'company',
   producerCategory: row.producer_category ?? undefined,
   iban: row.iban ?? undefined,
@@ -1080,6 +1083,13 @@ export default function App() {
   const [groupOrders, setGroupOrders] = React.useState<GroupOrder[]>(DEMO_MODE ? mockGroupOrders : []);
   const [userOrders, setUserOrders] = React.useState<GroupOrder[]>(DEMO_MODE ? mockGroupOrders : []);
   React.useEffect(() => {
+    if (typeof window === 'undefined' || !supabaseClient) return;
+    if (import.meta.env.DEV) {
+      (window as any).supabase = supabaseClient;
+      (window as any).appUserId = user?.id ?? null;
+    }
+  }, [supabaseClient, user?.id]);
+  React.useEffect(() => {
     if (!DEMO_MODE) return;
     setDemoOrders(groupOrders);
     setUserOrders(groupOrders);
@@ -1352,18 +1362,29 @@ export default function App() {
   }, [location.pathname]);
 
   const fetchLegalEntity = React.useCallback(
-    async (profileId: string): Promise<LegalEntityRow | null> => {
+    async (
+      profileId: string,
+      options?: { preferPrivate?: boolean }
+    ): Promise<LegalEntityRow | null> => {
       if (!supabaseClient) return null;
-      const { data, error } = await supabaseClient
-        .from('legal_entities_public')
-        .select('*')
-        .eq('profile_id', profileId)
-        .maybeSingle();
-      if (error) {
-        console.warn('legal_entities fetch error', error);
-        return null;
+      const fetchFrom = async (table: 'legal_entities' | 'legal_entities_public') => {
+        const { data, error } = await supabaseClient
+          .from(table)
+          .select('*')
+          .eq('profile_id', profileId)
+          .maybeSingle();
+        if (error) {
+          console.warn('legal_entities fetch error', error);
+          return null;
+        }
+        return (data as LegalEntityRow | null) ?? null;
+      };
+
+      if (options?.preferPrivate) {
+        const privateRow = await fetchFrom('legal_entities');
+        if (privateRow) return privateRow;
       }
-      return (data as LegalEntityRow | null) ?? null;
+      return fetchFrom('legal_entities_public');
     },
     [supabaseClient]
   );
@@ -1389,7 +1410,7 @@ export default function App() {
 
       const existing = await fetchExisting();
       if (existing) {
-        const legal = await fetchLegalEntity(existing.id);
+        const legal = await fetchLegalEntity(existing.id, { preferPrivate: true });
         return mapProfileRowToUser(existing, authUser, legal);
       }
 
@@ -1419,7 +1440,7 @@ export default function App() {
           .maybeSingle();
 
         if (!error && data) {
-          const legal = await fetchLegalEntity(authUser.id);
+          const legal = await fetchLegalEntity(authUser.id, { preferPrivate: true });
           return mapProfileRowToUser(data as ProfileRow, authUser, legal);
         }
         if (error && (error as any).code === '23505') {
@@ -1450,10 +1471,11 @@ export default function App() {
         return null;
       }
       if (!data) return null;
-      const legal = await fetchLegalEntity((data as ProfileRow).id);
+      const profileId = (data as ProfileRow).id;
+      const legal = await fetchLegalEntity(profileId, { preferPrivate: user?.id === profileId });
       return mapProfileRowToUser(data as ProfileRow, null, legal);
     },
-    [fetchLegalEntity, supabaseClient]
+    [fetchLegalEntity, supabaseClient, user?.id]
   );
 
   const fetchProfileById = React.useCallback(
@@ -1469,10 +1491,10 @@ export default function App() {
         return null;
       }
       if (!data) return null;
-      const legal = await fetchLegalEntity(profileId);
+      const legal = await fetchLegalEntity(profileId, { preferPrivate: user?.id === profileId });
       return mapProfileRowToUser(data as ProfileRow, null, legal);
     },
-    [fetchLegalEntity, supabaseClient]
+    [fetchLegalEntity, supabaseClient, user?.id]
   );
 
   React.useEffect(() => {
@@ -1969,12 +1991,12 @@ export default function App() {
         });
       }
 
-      await createPaymentStub({
+      const payment = await createPaymentStub({
         orderId: order.id,
         participantId: participant.id,
         amountCents: eurosToCents(draft.total),
-        status: 'paid',
       });
+      await updatePaymentStatus(payment.id, 'paid');
     } catch (error) {
       console.error('Payment finalize error:', error);
       const message = (error as Error)?.message ?? 'Impossible de finaliser le paiement.';
@@ -2147,6 +2169,7 @@ export default function App() {
         inStock: false,
         measurement,
         weightKg: payload.product.weightKg,
+        vatRate: payload.detail.vatRate ?? payload.product.vatRate,
       };
       finalizeCreate(fallbackProduct, payload.detail);
       return;
@@ -2175,6 +2198,7 @@ export default function App() {
             conservation_detail: payload.detail.compositionEtiquette?.conservationDetaillee ?? null,
             conservation_after_opening: payload.detail.compositionEtiquette?.conseilsUtilisation ?? null,
             default_price_cents: null,
+            vat_rate: payload.detail.vatRate ?? payload.product.vatRate ?? 0.055,
             producer_profile_id: producerProfileId,
             producer_name: producerName,
             producer_location: producerLocation,
@@ -2523,6 +2547,7 @@ export default function App() {
           legal_name: userData.legalEntity.legalName,
           siret: userData.legalEntity.siret,
           vat_number: userData.legalEntity.vatNumber ?? null,
+          vat_regime: userData.legalEntity.vatRegime ?? 'unknown',
           entity_type: userData.legalEntity.entityType ?? 'company',
           producer_category: userData.legalEntity.producerCategory ?? null,
           iban: userData.legalEntity.iban ?? null,
@@ -2558,6 +2583,7 @@ export default function App() {
         .select()
         .maybeSingle();
       if (legalError) {
+        console.error('legal_entities upsert error:', legalError);
         toast.error('Informations legales non mises a jour.');
       } else {
         legalEntityRow = legalData as LegalEntityRow;

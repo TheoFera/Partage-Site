@@ -11,7 +11,11 @@ import {
   type DbOrderParticipant,
   type DbOrderPickupSlot,
   type DbPayment,
+  type DbFacture,
+  type DbFactureLigne,
   type DeliveryOption,
+  type Facture,
+  type FactureLigne,
   type Order,
   type OrderFull,
   type OrderItem,
@@ -25,10 +29,12 @@ import {
   type Payment,
   type ProfileSummary,
   type ShareMode,
+  type InvoiceSerie,
   eurosToCents,
 } from '../types';
 
 const PRODUCT_IMAGE_BUCKET = 'product-images';
+const INVOICES_BUCKET = 'invoices';
 
 type DemoOrderState = {
   participants: OrderParticipant[];
@@ -278,6 +284,7 @@ const mapPaymentRow = (row: DbPayment): Payment => ({
   status: row.status,
   amountCents: row.amount_cents,
   feeCents: row.fee_cents,
+  feeVatCents: row.fee_vat_cents ?? 0,
   refundedAmountCents: row.refunded_amount_cents,
   currency: row.currency,
   paidAt: toDate(row.paid_at),
@@ -286,6 +293,38 @@ const mapPaymentRow = (row: DbPayment): Payment => ({
   raw: row.raw ?? {},
   createdAt: new Date(row.created_at),
   updatedAt: new Date(row.updated_at),
+});
+
+const mapFactureRow = (row: DbFacture): Facture => ({
+  id: row.id,
+  serie: row.serie,
+  producerProfileId: row.producer_profile_id,
+  orderId: row.order_id,
+  paymentId: row.payment_id,
+  clientProfileId: row.client_profile_id,
+  numero: row.numero,
+  issuedAt: new Date(row.issued_at),
+  currency: row.currency,
+  totalTtcCents: row.total_ttc_cents,
+  totalHtCents: row.total_ht_cents,
+  totalTvaCents: row.total_tva_cents,
+  mentionTva: row.mention_tva,
+  pdfPath: row.pdf_path,
+  status: row.status,
+  createdAt: new Date(row.created_at),
+  updatedAt: new Date(row.updated_at),
+});
+
+const mapFactureLigneRow = (row: DbFactureLigne): FactureLigne => ({
+  id: row.id,
+  factureId: row.facture_id,
+  label: row.label,
+  quantity: Number(row.quantity),
+  unitTtcCents: row.unit_ttc_cents,
+  totalTtcCents: row.total_ttc_cents,
+  vatRate: Number(row.vat_rate),
+  totalHtCents: row.total_ht_cents,
+  totalTvaCents: row.total_tva_cents,
 });
 
 const buildImageUrl = (client: SupabaseClient, path?: string | null, bucket = PRODUCT_IMAGE_BUCKET) => {
@@ -1464,6 +1503,7 @@ export const createPaymentStub = async (params: {
       status: params.status ?? 'pending',
       amountCents: params.amountCents,
       feeCents: 0,
+      feeVatCents: 0,
       refundedAmountCents: 0,
       currency: 'EUR',
       paidAt: params.status === 'paid' ? now : null,
@@ -1490,6 +1530,80 @@ export const createPaymentStub = async (params: {
     .single();
   if (error || !data) throw error ?? new Error('Paiement impossible.');
   return mapPaymentRow(data as DbPayment);
+};
+
+export const updatePaymentStatus = async (paymentId: string, status: Payment['status']) => {
+  if (DEMO_MODE) {
+    for (const state of demoStateByOrderId.values()) {
+      const idx = state.payments.findIndex((payment) => payment.id === paymentId);
+      if (idx === -1) continue;
+      const now = new Date();
+      const updated: Payment = {
+        ...state.payments[idx],
+        status,
+        paidAt: status === 'paid' ? now : state.payments[idx].paidAt,
+        updatedAt: now,
+      };
+      state.payments[idx] = updated;
+      return updated;
+    }
+    throw new Error('Paiement introuvable.');
+  }
+  const client = getClient();
+  const payload: Partial<DbPayment> = { status };
+  if (status === 'paid') {
+    payload.paid_at = new Date().toISOString();
+  }
+  const { data, error } = await client
+    .from('payments')
+    .update(payload)
+    .eq('id', paymentId)
+    .select('*')
+    .single();
+  if (error || !data) throw error ?? new Error('Mise a jour du paiement impossible.');
+  return mapPaymentRow(data as DbPayment);
+};
+
+const fetchInvoices = async (filters: {
+  orderId: string;
+  serie: InvoiceSerie;
+  clientProfileId?: string;
+  producerProfileId?: string;
+}): Promise<Facture[]> => {
+  if (DEMO_MODE) return [];
+  const client = getClient();
+  let query = client.from('factures').select('*').eq('order_id', filters.orderId).eq('serie', filters.serie);
+  if (filters.clientProfileId) {
+    query = query.eq('client_profile_id', filters.clientProfileId);
+  }
+  if (filters.producerProfileId) {
+    query = query.eq('producer_profile_id', filters.producerProfileId);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  return ((data as DbFacture[] | null) ?? []).map(mapFactureRow);
+};
+
+export const fetchParticipantInvoices = async (orderId: string, currentProfileId: string): Promise<Facture[]> =>
+  fetchInvoices({ orderId, serie: 'PROD_CLIENT', clientProfileId: currentProfileId });
+
+export const fetchProducerInvoices = async (orderId: string, producerProfileId: string): Promise<Facture[]> =>
+  fetchInvoices({ orderId, serie: 'PLAT_PROD', producerProfileId });
+
+export const fetchInvoiceLines = async (invoiceId: string): Promise<FactureLigne[]> => {
+  if (DEMO_MODE) return [];
+  const client = getClient();
+  const { data, error } = await client.from('facture_lignes').select('*').eq('facture_id', invoiceId);
+  if (error) throw error;
+  return ((data as DbFactureLigne[] | null) ?? []).map(mapFactureLigneRow);
+};
+
+export const getInvoiceDownloadUrl = async (invoice: Facture): Promise<string | null> => {
+  if (!invoice.pdfPath) return null;
+  const client = getClient();
+  const { data, error } = await client.storage.from(INVOICES_BUCKET).createSignedUrl(invoice.pdfPath, 60);
+  if (error) throw error;
+  return data?.signedUrl ?? null;
 };
 
 export const getParticipantByProfile = async (orderId: string, profileId: string): Promise<OrderParticipant | null> => {

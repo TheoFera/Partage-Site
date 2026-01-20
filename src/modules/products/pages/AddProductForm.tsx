@@ -46,6 +46,7 @@ export function AddProductForm({ onAddProduct, supabaseClient, currentUser }: Ad
       productId: blankProduct.id,
       name: '',
       category: '',
+      vatRate: 0.055,
       shortDescription: '',
       longDescription: '',
       producer: {

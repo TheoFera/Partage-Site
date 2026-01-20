@@ -1,6 +1,7 @@
 export type UserRole = 'producer' | 'sharer' | 'participant';
 export type DeliveryLeadType = 'days' | 'fixed_day';
 export type DeliveryDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+export type VatRegime = 'unknown' | 'franchise' | 'assujetti';
 
 export interface User {
   id: string;
@@ -39,6 +40,7 @@ export interface LegalEntity {
   legalName: string;
   siret: string;
   vatNumber?: string;
+  vatRegime?: VatRegime;
   entityType: 'company' | 'association' | 'public_institution';
   producerCategory?: string;
   iban?: string;
@@ -83,6 +85,7 @@ export interface Product {
   inStock: boolean;
   measurement: 'unit' | 'kg';
   weightKg?: number;
+  vatRate?: number;
 }
 
 export interface DeckCard extends Product {
@@ -362,6 +365,7 @@ export interface ProductDetail {
   productId: string;
   name: string;
   category?: string;
+  vatRate?: number;
   shortDescription?: string;
   longDescription?: string;
   productImage?: { url: string; alt: string; etiquetteUrl?: string };
@@ -451,6 +455,7 @@ export interface DbProduct {
   conservation_detail: string | null;
   conservation_after_opening: string | null;
   default_price_cents: number | null;
+  vat_rate?: number | null;
   producer_profile_id: string | null;
   producer_name: string | null;
   producer_location: string | null;

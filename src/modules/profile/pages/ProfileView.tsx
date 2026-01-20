@@ -805,6 +805,9 @@ function ProfileEditPanel({
   const [legalName, setLegalName] = React.useState(user.legalEntity?.legalName ?? '');
   const [siret, setSiret] = React.useState(user.legalEntity?.siret ?? '');
   const [vatNumber, setVatNumber] = React.useState(user.legalEntity?.vatNumber ?? '');
+  const [vatRegime, setVatRegime] = React.useState<LegalEntity['vatRegime']>(
+    user.legalEntity?.vatRegime ?? 'unknown'
+  );
   const [producerCategory, setProducerCategory] = React.useState(
     user.legalEntity?.producerCategory ?? ''
   );
@@ -1214,6 +1217,7 @@ function ProfileEditPanel({
             legalName: legalName.trim(),
             siret: siret.trim(),
             vatNumber: vatNumber.trim() || undefined,
+            vatRegime: vatRegime ?? 'unknown',
             entityType,
             producerCategory: producerCategory.trim() || undefined,
             iban: iban.trim() || undefined,
@@ -1605,6 +1609,33 @@ function ProfileEditPanel({
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                 />
               </div>
+              <div>
+                <label className="block text-sm text-[#6B7280]">Regime TVA</label>
+                <select
+                  value={vatRegime ?? 'unknown'}
+                  onChange={(e) => setVatRegime(e.target.value as LegalEntity['vatRegime'])}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                >
+                  <option value="unknown">Selectionner un regime</option>
+                  <option value="franchise">Franchise de base (TVA non applicable)</option>
+                  <option value="assujetti">Assujetti a la TVA</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-[#6B7280]">Numero de TVA</label>
+                <input
+                  type="text"
+                  value={vatNumber}
+                  onChange={(e) => setVatNumber(e.target.value)}
+                  placeholder="FRXX999999999"
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                />
+                {vatRegime === 'assujetti' && !vatNumber.trim() ? (
+                  <p className="mt-2 text-xs text-[#B45309]">
+                    Le numero de TVA est requis pour un regime assujetti.
+                  </p>
+                ) : null}
+              </div>
               {role === 'producer' && (
                 <div>
                   <label className="block text-sm text-[#6B7280]">Catégorie de producteur</label>
@@ -1613,7 +1644,7 @@ function ProfileEditPanel({
                     onChange={(e) => setProducerCategory(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                   >
-                    <option value="">Sélectionner une categorie</option>
+                    <option value="">Sélectionner une catégorie</option>
                     {producerCategoryOptions.map((option) => (
                       <option key={option.id} value={option.id}>
                         {option.label}
