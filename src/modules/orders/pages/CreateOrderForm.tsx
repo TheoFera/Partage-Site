@@ -1,10 +1,13 @@
 import React from 'react';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { useNavigate } from 'react-router-dom';
 import { DeckCard, DeliveryDay, DeliveryLeadType, User } from '../../../shared/types';
 import { Calendar, MapPin, Package, Percent, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CARD_WIDTH, CARD_HEIGHT, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../../../shared/constants/cards';
+import { Avatar } from '../../../shared/ui/Avatar';
 import { ImageWithFallback } from '../../../shared/ui/ImageWithFallback';
 import { ProductResultCard } from '../../products/components/ProductGroup';
+import { formatUnitWeightLabel } from '../../products/utils/weight';
 import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { toast } from 'sonner';
 import { createOrder } from '../api/orders';
@@ -17,6 +20,7 @@ interface CreateOrderFormProps {
   onCancel?: () => void;
   user?: User | null;
   producer?: User | null;
+  supabaseClient?: SupabaseClient | null;
 }
 
 type PickupSlot = {
@@ -37,6 +41,16 @@ const defaultSlots: PickupSlot[] = [
   { day: 'saturday', label: 'Samedi', enabled: true, start: '10:00', end: '12:00' },
   { day: 'sunday', label: 'Dimanche', enabled: false, start: '10:00', end: '12:00' },
 ];
+
+const DEFAULT_PROFILE_AVATAR =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
+      <circle cx="80" cy="80" r="80" fill="#E5E7EB" />
+      <circle cx="80" cy="64" r="30" fill="#9CA3AF" />
+      <ellipse cx="80" cy="118" rx="42" ry="32" fill="#6B7280" />
+    </svg>`
+  );
 
 type DeliveryOption = 'chronofresh' | 'producer_delivery' | 'producer_pickup';
 
@@ -177,7 +191,7 @@ function getProductWeightKg(product: DeckCard) {
     }
   }
   if (product.measurement === 'kg') return 1;
-  return 0.25;
+  return 1;
 }
 
 type GeoPoint = { lat: number; lng: number };
@@ -196,6 +210,8 @@ const distanceKm = (from: GeoPoint, to: GeoPoint) => {
   return 2 * earthRadius * Math.asin(Math.min(1, Math.sqrt(a)));
 };
 
+const buildProfileHandle = (value?: string | null) => (value ? value.toLowerCase().replace(/\s+/g, '') : '');
+
 export function CreateOrderForm({
   products,
   preselectedProductIds,
@@ -203,6 +219,7 @@ export function CreateOrderForm({
   onCancel,
   user,
   producer,
+  supabaseClient,
 }: CreateOrderFormProps) {
   const navigate = useNavigate();
   const [selectedProducts, setSelectedProducts] = React.useState<string[]>(preselectedProductIds ?? []);
@@ -392,10 +409,10 @@ export function CreateOrderForm({
       return { within: false, reason: 'Adresse producteur manquante.' };
     }
     if (!isDeliveryAddressComplete) {
-      return { within: false, reason: 'Adresse de livraison incomplete.' };
+      return { within: false, reason: 'Adresse de livraison incomplète.' };
     }
     if (deliveryGeoStatus === 'loading' || deliveryGeoStatus === 'idle') {
-      return { within: false, reason: "Verification de l'adresse en cours." };
+      return { within: false, reason: "Vérification de l'adresse en cours." };
     }
     if (deliveryGeoStatus === 'error' || !deliveryGeoCoords) {
       return { within: false, reason: 'Adresse de livraison introuvable.' };
@@ -433,14 +450,14 @@ export function CreateOrderForm({
         return { ok: false, reason: `Poids min requis: ${minReq} kg.` };
       }
       if (maxReq > 0 && orderMinWeight > maxReq) {
-        return { ok: false, reason: `Poids min doit etre <= ${maxReq} kg.` };
+        return { ok: false, reason: `Poids min doit être <= ${maxReq} kg.` };
       }
       if (maxReq > 0) {
         if (orderMaxWeight <= 0) {
-          return { ok: false, reason: `Definissez un poids max <= ${maxReq} kg.` };
+          return { ok: false, reason: `Définissez un poids max <= ${maxReq} kg.` };
         }
         if (orderMaxWeight > maxReq) {
-          return { ok: false, reason: `Poids max autorise: ${maxReq} kg.` };
+          return { ok: false, reason: `Poids max autorisé: ${maxReq} kg.` };
         }
       }
       return { ok: true };
@@ -694,7 +711,25 @@ export function CreateOrderForm({
     const basePlusLogComplete = p.price + logPerUnitComplete;
     const participantPriceComplete =
       basePlusLogComplete * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
-    const priceType = p.measurement === 'kg' ? 'Au kilo' : 'À la pièce';
+    const measurementLabel = p.measurement === 'kg' ? '/ Kg' : '/ unité';
+    const sanitizedUnitLabel = (p.unit || '').trim();
+    const unitWeightLabel =
+      p.measurement === 'unit' ? formatUnitWeightLabel(p.weightKg) : '';
+    const measurementDetails = [sanitizedUnitLabel];
+    if (unitWeightLabel) {
+      measurementDetails.push(unitWeightLabel);
+    }
+    const measurementDescription = measurementDetails.filter(Boolean).join(' ');
+    const measurementParenthetical = measurementDescription ? (
+      <span className="measurement-parenthetical">({measurementDescription})</span>
+    ) : null;
+    const priceType = measurementParenthetical ? (
+      <>
+        {measurementLabel} {measurementParenthetical}
+      </>
+    ) : (
+      measurementLabel
+    );
 
     return {
       id: p.id,
@@ -732,7 +767,7 @@ export function CreateOrderForm({
   const summaryRows = [
     {
       key: 'priceType',
-      label: 'Type prix',
+      label: 'Conditionnement',
       className: 'is-center',
       render: (row: (typeof perProductRows)[number]) => row.priceType,
     },
@@ -801,6 +836,23 @@ export function CreateOrderForm({
     acc[producerId].products.push(card);
     return acc;
   }, {} as Record<string, { producerName: string; products: DeckCard[] }>);
+
+  const groupedByProducerEntries = Object.entries(groupedByProducer);
+  const primaryProducerName =
+    groupedByProducerEntries[0]?.[1]?.producerName ?? producer?.name ?? '';
+  const producerProfileHandle = producer?.handle ?? null;
+  const producerAvatarPath = producer?.avatarPath ?? null;
+  const producerAvatarUpdatedAt = producer?.avatarUpdatedAt ?? null;
+  const producerAvatarFallback = producer?.profileImage?.trim() || DEFAULT_PROFILE_AVATAR;
+  const canNavigateProducer = Boolean(
+    (producerProfileHandle ?? '').trim() || buildProfileHandle(primaryProducerName)
+  );
+  const handleProducerNavigation = React.useCallback(() => {
+    const fallback = buildProfileHandle(primaryProducerName);
+    const target = (producerProfileHandle ?? '').trim() || fallback;
+    if (!target) return;
+    navigate(`/profil/${encodeURIComponent(target)}`);
+  }, [navigate, primaryProducerName, producerProfileHandle]);
 
   const canReceiveCashShare = user?.accountType ? user.accountType !== 'individual' : false;
 
@@ -1175,12 +1227,48 @@ export function CreateOrderForm({
       <div className="create-order-layout gap-6">
         <div className="space-y-6">
           <div className="bg-white rounded-xl p-6 shadow-sm">
-            <h3 className="text-[#1F2937] mb-4">
-              Sélectionnez les produits de {Object.entries(groupedByProducer)[0]?.[1]?.producerName ?? ''} à inclure dans la commande
-            </h3>
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <h3 className="text-[#1F2937] flex-1 min-w-0">
+                Sélectionnez les produits de{' '}
+                {primaryProducerName ? (
+                  <button
+                    type="button"
+                    onClick={handleProducerNavigation}
+                    disabled={!canNavigateProducer}
+                    className={`inline-flex items-baseline font-semibold text-[#1F2937] transition-colors disabled:cursor-default ${
+                      canNavigateProducer ? 'hover:text-[#FF6B4A] hover:underline' : ''
+                    }`}
+                    aria-label={`Voir le profil de ${primaryProducerName}`}
+                  >
+                    {primaryProducerName}
+                  </button>
+                ) : (
+                  ''
+                )}{' '}
+                à inclure dans la commande
+              </h3>
+              {primaryProducerName ? (
+                <button
+                  type="button"
+                  onClick={handleProducerNavigation}
+                  disabled={!canNavigateProducer}
+                  aria-label={`Voir le profil de ${primaryProducerName}`}
+                  className="h-10 w-10 rounded-full border border-gray-200 bg-white overflow-hidden p-0 flex-shrink-0 cursor-pointer disabled:cursor-default"
+                >
+                  <Avatar
+                    supabaseClient={supabaseClient ?? null}
+                    path={producerAvatarPath}
+                    updatedAt={producerAvatarUpdatedAt}
+                    fallbackSrc={producerAvatarFallback}
+                    alt={primaryProducerName}
+                    className="w-full h-full object-cover"
+                  />
+                </button>
+              ) : null}
+            </div>
 
             <div className="space-y-6">
-              {Object.entries(groupedByProducer).map(([producerId, group]) => (
+              {groupedByProducerEntries.map(([producerId, group]) => (
                 <div key={producerId} className="space-y-2">
                   <ProducerProductCarousel
                     products={group.products}
@@ -1370,7 +1458,7 @@ export function CreateOrderForm({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Poids minimum de la commande</label>
+                <label className="block text-sm text-[#6B7280] mb-2">Poids minimum de la commande (en Kg)</label>
                 <input
                   type="number"
                   value={normalizedMinWeight}
@@ -1387,7 +1475,7 @@ export function CreateOrderForm({
               </div>
 
               <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Poids maximum de la commande</label>
+                <label className="block text-sm text-[#6B7280] mb-2">Poids maximum de la commande (en Kg)</label>
                 <input
                   type="number"
                   value={normalizedMaxWeight}
@@ -1448,7 +1536,7 @@ export function CreateOrderForm({
                 })}
               </div>
               {enabledDeliveryOptions.length === 0 && (
-                <p className="text-xs text-[#B45309]">Aucune option disponible pour les criteres actuels.</p>
+                <p className="text-xs text-[#B45309]">Aucune option disponible pour les critères actuels.</p>
               )}
             </div>
             {deliveryOption === 'producer_pickup' && (
@@ -1473,12 +1561,6 @@ export function CreateOrderForm({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               
             </div>
-            {(minWeightLimit > 0 || maxWeightLimit > 0) && (
-              <p className="text-xs text-[#6B7280]">
-                Seuils producteur pour cette option : {formatWeightRange(minWeightLimit, maxWeightLimit)}.
-              </p>
-            )}
-
             <div>
                 <label className="block text-sm text-[#6B7280] mb-2">Date de clôture de la commande</label>
                 <div className="relative">
@@ -1887,6 +1969,12 @@ export function CreateOrderForm({
                     <span style={{ fontWeight: 600 }}>{effectiveWeight.toFixed(2)} kg</span>
                   </p>
                   <p>
+                    Livraison :{' '}
+                    <span style={{ fontWeight: 600 }}>
+                      {selectedDeliveryOption?.title ?? 'Non precise'}
+                    </span>
+                  </p>
+                  <p>
                     Coût livraison total : <span style={{ fontWeight: 600 }}>{logTotal.toFixed(2)} €</span>
                   </p>
                   <p>
@@ -1901,17 +1989,19 @@ export function CreateOrderForm({
                     </span>
                     )
                   </p>
-                  <p>
-                    Livraison :{' '}
-                    <span style={{ fontWeight: 600 }}>
-                      {selectedDeliveryOption?.title ?? 'Non precise'}
-                    </span>
-                  </p>
                   {hasEstimatedDeliveryDate && (
                     <p>
-                      Date de livraison estimee :{' '}
+                      Date de livraison estimée :{' '}
                       <span style={{ fontWeight: 600 }}>
                         {estimatedDeliveryDate?.toLocaleDateString('fr-FR')}
+                      </span>
+                    </p>
+                  )}
+                  {hasPickupInfo && (
+                    <p>
+                      Période de distribution :{' '}
+                      <span style={{ fontWeight: 600 }}>
+                      {renderPickupLine()}.
                       </span>
                     </p>
                   )}
@@ -1951,11 +2041,6 @@ export function CreateOrderForm({
                     </tbody>
                   </table>
                 </div>
-                {hasPickupInfo && (
-                  <p className="text-[#6B7280]">
-                    Disponibilite : {renderPickupLine()}.
-                  </p>
-                )}
               </div>
             )}
           </div>
@@ -2239,6 +2324,25 @@ function ProducerProductCarousel({
           const priceLabel = hasPrice
             ? formatEurosFromCents(eurosToCents(product.price))
             : 'Prix à venir';
+          const measurementLabel = product.measurement === 'kg' ? '/ Kg' : '/ unité';
+          const sanitizedUnitLabel = (product.unit || '').trim();
+          const unitWeightLabel =
+            product.measurement === 'unit' ? formatUnitWeightLabel(product.weightKg) : '';
+          const measurementDetails = [sanitizedUnitLabel];
+          if (unitWeightLabel) {
+            measurementDetails.push(unitWeightLabel);
+          }
+          const measurementDescription = measurementDetails.filter(Boolean).join(' ');
+          const measurementParenthetical = measurementDescription ? (
+            <span className="measurement-parenthetical">({measurementDescription})</span>
+          ) : null;
+          const measurementInlineLabel = measurementParenthetical ? (
+            <>
+              {measurementLabel} {measurementParenthetical}
+            </>
+          ) : (
+            measurementLabel
+          );
           return (
             <button
               key={product.id}
@@ -2273,20 +2377,25 @@ function ProducerProductCarousel({
                   style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                 />
               </div>
-              <div style={{ padding: '10px 12px', textAlign: 'left', display: 'grid', gap: 6, flex: 1 }}>
-                <p style={{ margin: 0, color: '#6B7280', fontSize: 12, lineHeight: '16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {product.producerName}
-                </p>
-                <p style={{ margin: 0, color: '#111827', fontWeight: 700, fontSize: 15, lineHeight: '20px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ padding: '10px 12px', textAlign: 'left', display: 'grid', gap: 8 }}>
+                <p style={{ margin: 0, color: '#111827', fontWeight: 700, fontSize: 16, lineHeight: '30px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {product.name}
                 </p>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                  <span style={{ color: '#FF6B4A', fontWeight: 700, fontSize: 15 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0,
+                    fontSize: 12,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span style={{ color: '#FF6B4A', fontWeight: 700, fontSize: 16 }}>
                     {priceLabel}
                   </span>
                   {hasPrice ? (
-                    <span style={{ fontSize: 11, color: '#374151' }}>
-                      / {product.measurement === 'kg' ? 'Kg' : 'Unité'} ({product.unit})
+                    <span style={{ fontSize: 12, color: '#374151' }}>
+                      {measurementInlineLabel}
                     </span>
                   ) : null}
                 </div>

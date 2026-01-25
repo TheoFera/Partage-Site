@@ -34,7 +34,7 @@ import {
 } from '../types';
 
 const PRODUCT_IMAGE_BUCKET = 'product-images';
-const INVOICES_BUCKET = 'invoices';
+const INVOICES_BUCKET = 'facturation-documents';
 
 type DemoOrderState = {
   participants: OrderParticipant[];
@@ -1562,6 +1562,28 @@ export const updatePaymentStatus = async (paymentId: string, status: Payment['st
     .single();
   if (error || !data) throw error ?? new Error('Mise a jour du paiement impossible.');
   return mapPaymentRow(data as DbPayment);
+};
+
+export const finalizePaymentSimulation = async (paymentId: string) => {
+  if (DEMO_MODE) {
+    return updatePaymentStatus(paymentId, 'paid');
+  }
+  const client = getClient();
+  const { data, error } = await client.functions.invoke('finalize-payment', {
+    body: { paymentId },
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const createPlatformInvoiceForOrder = async (orderId: string) => {
+  if (DEMO_MODE) return null;
+  const client = getClient();
+  const { data, error } = await client.rpc('create_platform_invoice_for_order', {
+    p_order_id: orderId,
+  });
+  if (error) throw error;
+  return data;
 };
 
 const fetchInvoices = async (filters: {

@@ -35,6 +35,7 @@ import {
   DeliveryDay,
   LegalEntity,
   OrderPurchaseDraft,
+  TimelineStep,
 } from './shared/types';
 import { getSupabaseClient } from './shared/lib/supabaseClient';
 import { eurosToCents, formatEurosFromCents } from './shared/lib/money';
@@ -46,9 +47,9 @@ import {
   getParticipantByProfile,
   listOrdersForUser,
   listPublicOrders,
+  finalizePaymentSimulation,
   requestParticipation,
   setDemoOrders,
-  updatePaymentStatus,
 } from './modules/orders/api/orders';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
@@ -220,6 +221,26 @@ type OrderRouteProps = {
   supabaseClient?: SupabaseClient | null;
 };
 
+type DbNotificationRow = {
+  id: string;
+  title: string;
+  message: string;
+  created_at: string;
+  read_at: string | null;
+  order_id?: string | null;
+  data?: Record<string, unknown> | null;
+};
+
+type NotificationItem = {
+  id: string;
+  title: string;
+  message: string;
+  time: string;
+  unread?: boolean;
+  orderId?: string | null;
+  orderCode?: string | null;
+};
+
 const OrderRoute = ({
   groupOrders,
   currentUser,
@@ -321,6 +342,21 @@ const parseDistanceKm = (value?: string) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const formatRelativeTime = (value: string | Date) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const diffMs = Date.now() - date.getTime();
+  if (diffMs < 60_000) return "A l'instant";
+  const diffMinutes = Math.floor(diffMs / 60_000);
+  if (diffMinutes < 60) return `Il y a ${diffMinutes} min`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `Il y a ${diffHours} h`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) return 'Hier';
+  if (diffDays < 7) return `Il y a ${diffDays} j`;
+  return date.toLocaleDateString('fr-FR');
+};
+
 const geocodeAddress = async (query: string): Promise<{ lat: number; lng: number } | null> => {
   if (!query) return null;
   try {
@@ -348,6 +384,29 @@ const normalizeText = (value: string) =>
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
+
+const normalizeLocationPart = (value: string) =>
+  normalizeText(value).replace(/[^a-z0-9]+/g, ' ').trim();
+
+const collectLocationParts = (step: TimelineStep) => {
+  const baseParts = [step.address, step.addressDetails, step.country, step.postcode, step.city]
+    .map((value) => (value ?? '').trim())
+    .filter(Boolean);
+  const baseNormalized = baseParts.map(normalizeLocationPart).filter(Boolean);
+  const lieu = (step.lieu ?? '').trim();
+  const normalizedLieu = normalizeLocationPart(lieu);
+  const includeLieu =
+    lieu &&
+    (!baseNormalized.length || !baseNormalized.every((part) => normalizedLieu.includes(part)));
+  const combined = includeLieu ? [...baseParts, lieu] : baseParts;
+  const seen = new Set<string>();
+  return combined.filter((value) => {
+    const key = normalizeLocationPart(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
 
 const slugify = (value: string) => normalizeText(value).replace(/[^a-z0-9]+/g, '-');
 const normalizeLabelKey = (value?: string | null) => (value ?? '').trim().toLowerCase();
@@ -1336,6 +1395,9 @@ export default function App() {
   const [profileRoleFilters, setProfileRoleFilters] = React.useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [notificationsOpen, setNotificationsOpen] = React.useState(false);
+  const [notifications, setNotifications] = React.useState<NotificationItem[]>(
+    DEMO_MODE ? mockNotifications : []
+  );
   const [profileMode, setProfileMode] = React.useState<'view' | 'edit'>('view');
   const profileSaveHandlerRef = React.useRef<(() => void) | null>(null);
   const [canSaveProfile, setCanSaveProfile] = React.useState(false);
@@ -1347,6 +1409,148 @@ export default function App() {
   const prevRoleRef = React.useRef<User['role'] | null>(null);
   const lastTabRef = React.useRef<string | null>(null);
   const orderBuilderSourceRef = React.useRef<string | null>(null);
+  const wasNotificationsOpenRef = React.useRef(false);
+  const mapDbNotification = React.useCallback((row: DbNotificationRow): NotificationItem => {
+    const data = (row.data as Record<string, unknown> | null) ?? null;
+    const orderCode =
+      typeof data?.order_code === 'string' && data.order_code.trim() ? data.order_code : null;
+    return {
+      id: row.id,
+      title: row.title,
+      message: row.message,
+      time: formatRelativeTime(row.created_at),
+      unread: !row.read_at,
+      orderId: row.order_id ?? null,
+      orderCode,
+    };
+  }, []);
+  const notificationsUnreadCount = React.useMemo(
+    () => notifications.filter((item) => item.unread).length,
+    [notifications]
+  );
+  const handleNotificationClick = React.useCallback(
+    (notification: NotificationItem) => {
+      const directCode = notification.orderCode;
+      if (directCode) {
+        navigate(`/cmd/${directCode}`);
+        setNotificationsOpen(false);
+        return;
+      }
+      if (!notification.orderId || !supabaseClient) return;
+      supabaseClient
+        .from('orders')
+        .select('order_code')
+        .eq('id', notification.orderId)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (error) {
+            console.warn('Order code fetch error:', error);
+            return;
+          }
+          const orderCode = data?.order_code;
+          if (!orderCode) return;
+          navigate(`/cmd/${orderCode}`);
+          setNotificationsOpen(false);
+        });
+    },
+    [navigate, supabaseClient]
+  );
+
+  React.useEffect(() => {
+    if (DEMO_MODE) {
+      setNotifications(mockNotifications);
+      return;
+    }
+    if (!supabaseClient || !user?.id) {
+      setNotifications([]);
+      return;
+    }
+    let active = true;
+    const loadNotifications = async () => {
+      const { data, error } = await supabaseClient
+        .from('notifications')
+        .select('id, title, message, created_at, read_at, order_id, data')
+        .eq('profile_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(40);
+      if (!active) return;
+      if (error) {
+        console.warn('Notifications load error:', error);
+        setNotifications([]);
+        return;
+      }
+      const rows = (data as DbNotificationRow[]) ?? [];
+      setNotifications(rows.map(mapDbNotification));
+    };
+    loadNotifications();
+    return () => {
+      active = false;
+    };
+  }, [mapDbNotification, supabaseClient, user?.id]);
+
+  React.useEffect(() => {
+    if (DEMO_MODE || !supabaseClient || !user?.id) return;
+    const channel = supabaseClient
+      .channel(`notifications-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `profile_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const row = payload.new as DbNotificationRow;
+          const mapped = mapDbNotification(row);
+          setNotifications((prev) => {
+            if (prev.some((item) => item.id === mapped.id)) return prev;
+            return [mapped, ...prev].slice(0, 50);
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'notifications',
+          filter: `profile_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const row = payload.new as DbNotificationRow;
+          setNotifications((prev) =>
+            prev.map((item) => (item.id === row.id ? mapDbNotification(row) : item))
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabaseClient.removeChannel(channel);
+    };
+  }, [mapDbNotification, supabaseClient, user?.id]);
+
+  React.useEffect(() => {
+    const wasOpen = wasNotificationsOpenRef.current;
+    wasNotificationsOpenRef.current = notificationsOpen;
+    if (!wasOpen || notificationsOpen) return;
+    if (DEMO_MODE || !supabaseClient || !user?.id) return;
+    const unreadIds = notifications.filter((item) => item.unread).map((item) => item.id);
+    if (!unreadIds.length) return;
+    const readAt = new Date().toISOString();
+    supabaseClient
+      .from('notifications')
+      .update({ read_at: readAt })
+      .in('id', unreadIds)
+      .eq('profile_id', user.id)
+      .then(({ error }) => {
+        if (error) console.warn('Notifications read error:', error);
+      });
+    setNotifications((prev) =>
+      prev.map((item) => (unreadIds.includes(item.id) ? { ...item, unread: false } : item))
+    );
+  }, [notifications, notificationsOpen, supabaseClient, user?.id]);
 
   const orderCodeFromPath = React.useMemo(() => {
     const match = location.pathname.match(/^\/cmd\/([^/]+)/);
@@ -1996,7 +2200,7 @@ export default function App() {
         participantId: participant.id,
         amountCents: eurosToCents(draft.total),
       });
-      await updatePaymentStatus(payment.id, 'paid');
+      await finalizePaymentSimulation(payment.id);
     } catch (error) {
       console.error('Payment finalize error:', error);
       const message = (error as Error)?.message ?? 'Impossible de finaliser le paiement.';
@@ -2274,38 +2478,53 @@ export default function App() {
         }
 
         const timeline = payload.detail.tracabilite?.timeline ?? [];
+        let timelineWithCoords = timeline;
         let createdSteps: Array<{ id: string; step_label: string; sort_order: number }> = [];
         if (timeline.length) {
-          const stepRows = timeline
-            .map((step, index) => {
-              const label = (step.etape || '').trim();
-              if (!label) return null;
-              const locationParts = [
-                step.address,
-                step.addressDetails,
-                step.postcode,
-                step.city,
-                step.country,
-                step.lieu,
-              ]
-                .map((value) => (value ?? '').trim())
-                .filter(Boolean);
-              return {
-                product_id: productId,
-                step_label: label,
-                description: step.description?.trim() || null,
-                location: locationParts.length ? locationParts.join(', ') : null,
-                location_address: step.address?.trim() || null,
-                location_details: step.addressDetails?.trim() || null,
-                location_postcode: step.postcode?.trim() || null,
-                location_city: step.city?.trim() || null,
-                location_country: step.country?.trim() || null,
-                location_lat: Number.isFinite(step.lat) ? step.lat : null,
-                location_lng: Number.isFinite(step.lng) ? step.lng : null,
-                sort_order: index,
-              };
-            })
-            .filter(Boolean) as Array<Record<string, unknown>>;
+          const stepRows: Array<Record<string, unknown>> = [];
+          const resolvedTimeline: TimelineStep[] = [];
+
+          for (const [index, step] of timeline.entries()) {
+            const label = (step.etape || '').trim();
+            const locationParts = collectLocationParts(step);
+            let lat = toNumberOrUndefined(step.lat);
+            let lng = toNumberOrUndefined(step.lng);
+
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+              const query = locationParts.join(', ');
+              if (query) {
+                const coords = await geocodeAddress(query);
+                if (coords) {
+                  lat = coords.lat;
+                  lng = coords.lng;
+                }
+              }
+            }
+
+            resolvedTimeline.push({
+              ...step,
+              lat: Number.isFinite(lat) ? (lat as number) : step.lat,
+              lng: Number.isFinite(lng) ? (lng as number) : step.lng,
+            });
+
+            if (!label) continue;
+            stepRows.push({
+              product_id: productId,
+              step_label: label,
+              description: step.description?.trim() || null,
+              location: locationParts.length ? locationParts.join(', ') : null,
+              location_address: step.address?.trim() || null,
+              location_details: step.addressDetails?.trim() || null,
+              location_postcode: step.postcode?.trim() || null,
+              location_city: step.city?.trim() || null,
+              location_country: step.country?.trim() || null,
+              location_lat: Number.isFinite(lat) ? lat : null,
+              location_lng: Number.isFinite(lng) ? lng : null,
+              sort_order: index,
+            });
+          }
+
+          timelineWithCoords = resolvedTimeline;
 
           if (stepRows.length) {
             const { data: stepData, error: stepError } = await supabaseClient
@@ -2387,6 +2606,14 @@ export default function App() {
 
         const nextDetail: ProductDetail = {
           ...payload.detail,
+          tracabilite: payload.detail.tracabilite
+            ? {
+                ...payload.detail.tracabilite,
+                timeline: timelineWithCoords.length
+                  ? timelineWithCoords
+                  : payload.detail.tracabilite.timeline,
+              }
+            : payload.detail.tracabilite,
           productId: productCode,
           productImage: primaryImageUrl
             ? {
@@ -3231,6 +3458,7 @@ export default function App() {
         onToggleFilters={showSearch ? handleHeaderFiltersToggle : undefined}
         notificationsOpen={notificationsOpen}
         onToggleNotifications={() => setNotificationsOpen((prev) => !prev)}
+        notificationsUnreadCount={notificationsUnreadCount}
       />
 
       <main
@@ -3259,7 +3487,8 @@ export default function App() {
         <NotificationsPopover
           open={notificationsOpen}
           onClose={() => setNotificationsOpen(false)}
-          notifications={mockNotifications}
+          notifications={notifications}
+          onNotificationClick={handleNotificationClick}
         />
         {isOrderView && !isOrderFlowStep ? (
           <div className="mb-6">
@@ -3319,6 +3548,7 @@ export default function App() {
                 preselectedProductIds={orderBuilderSelection ?? undefined}
                 user={user}
                 producer={orderProducer}
+                supabaseClient={supabaseClient}
                 onCreateOrder={handleCreateOrder}
                 onCancel={() => {
                   const target = orderBuilderSourceRef.current ?? tabRoutes.home;

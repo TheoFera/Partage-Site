@@ -23,6 +23,7 @@ interface HeaderProps {
   onToggleFilters?: () => void;
   notificationsOpen?: boolean;
   onToggleNotifications?: () => void;
+  notificationsUnreadCount?: number;
 }
 
 export function Header({
@@ -38,6 +39,7 @@ export function Header({
   onToggleFilters,
   notificationsOpen,
   onToggleNotifications,
+  notificationsUnreadCount = 0,
 }: HeaderProps) {
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -274,6 +276,30 @@ export function Header({
               >
                 <Bell className={`w-6 h-6 ${notificationsOpen ? 'text-[#FF6B4A]' : 'text-[#6B7280]'}`} />
               </button>
+              {notificationsUnreadCount > 0 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: -2,
+                    right: -2,
+                    minWidth: 18,
+                    height: 18,
+                    padding: '0 5px',
+                    borderRadius: 9999,
+                    background: '#FF6B4A',
+                    color: '#FFFFFF',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 0 0 2px #FFFFFF',
+                    pointerEvents: 'none',
+                  }}
+                >
+                  {notificationsUnreadCount > 99 ? '99+' : notificationsUnreadCount}
+                </span>
+              )}
             </div>
           </div>
         </div>

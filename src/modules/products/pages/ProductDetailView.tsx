@@ -197,25 +197,71 @@ const buildLotDatesMapFromDb = (steps: DbLotTraceStep[], journeySteps: TimelineS
     journeySteps
   );
 
-const formatStepLocationLabel = (step: TimelineStep) => {
-  const parts = [
-    step.address,
-    step.addressDetails,
-    step.country,
-    step.postcode,
-    step.city,
-    step.lieu,
-  ]
+const normalizeLocationPart = (value: string) =>
+  normalizeText(value).replace(/[^a-z0-9]+/g, ' ').trim();
+
+const collectLocationParts = (step: TimelineStep) => {
+  const baseParts = [step.address, step.addressDetails, step.country, step.postcode, step.city]
     .map((value) => (value ?? '').trim())
     .filter(Boolean);
+  const baseNormalized = baseParts.map(normalizeLocationPart).filter(Boolean);
+  const lieu = (step.lieu ?? '').trim();
+  const normalizedLieu = normalizeLocationPart(lieu);
+  const includeLieu =
+    lieu &&
+    (!baseNormalized.length || !baseNormalized.every((part) => normalizedLieu.includes(part)));
+  const combined = includeLieu ? [...baseParts, lieu] : baseParts;
+  const seen = new Set<string>();
+  return combined.filter((value) => {
+    const key = normalizeLocationPart(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const formatStepLocationLabel = (step: TimelineStep) => {
+  const parts = collectLocationParts(step);
   return parts.length ? parts.join(', ') : 'A preciser';
 };
 
 const buildStepLocationQuery = (step: TimelineStep) => {
-  const parts = [step.address, step.addressDetails, step.postcode, step.city, step.country, step.lieu]
-    .map((value) => (value ?? '').trim())
-    .filter(Boolean);
+  const parts = collectLocationParts(step);
   return parts.length ? parts.join(', ') : '';
+};
+
+const geocodeCache = new Map<string, { lat: number; lng: number } | null>();
+
+const geocodeLocation = async (query: string) => {
+  const normalizedQuery = query.trim().replace(/\s+/g, ' ');
+  if (!normalizedQuery) return null;
+  if (geocodeCache.has(normalizedQuery)) {
+    return geocodeCache.get(normalizedQuery) ?? null;
+  }
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
+      normalizedQuery
+    )}`;
+    const response = await fetch(url, { headers: { 'Accept-Language': 'fr' } });
+    if (!response.ok) {
+      geocodeCache.set(normalizedQuery, null);
+      return null;
+    }
+    const data = (await response.json()) as Array<{ lat?: string; lon?: string }>;
+    const first = data?.[0];
+    const lat = Number(first?.lat);
+    const lng = Number(first?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      geocodeCache.set(normalizedQuery, null);
+      return null;
+    }
+    const coords = { lat, lng };
+    geocodeCache.set(normalizedQuery, coords);
+    return coords;
+  } catch {
+    geocodeCache.set(normalizedQuery, null);
+    return null;
+  }
 };
 
 const formatEurosValue = (value: number) => formatEurosFromCents(eurosToCents(value));
@@ -506,6 +552,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [pendingJourneyImages, setPendingJourneyImages] = React.useState<
     Record<string, { file: File; previewUrl: string }>
   >({});
+  const [timelineOverride, setTimelineOverride] = React.useState<TimelineStep[] | null>(null);
   const [lotStepDatesByLot, setLotStepDatesByLot] = React.useState<Record<string, Record<string, LotStepDates>>>(
     {}
   );
@@ -593,6 +640,21 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [localTimeline, setLocalTimeline] = React.useState<TimelineStep[]>(() =>
     ensureTimelineIds(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline)
   );
+  const resetTimelineEdits = React.useCallback(() => {
+    setLocalTimeline(
+      ensureTimelineIds(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline)
+    );
+    setLotStepDatesByLot({});
+    setPendingJourneyImages((current) => {
+      Object.values(current).forEach((entry) => {
+        if (entry.previewUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(entry.previewUrl);
+        }
+      });
+      return {};
+    });
+    setTimelineOverride(null);
+  }, [detail, ensureTimelineIds, fallbackTimeline]);
   const loadLotTraceSteps = React.useCallback(
     async (lotCode: string, lotDbId?: string | null) => {
       if (lotStepDatesByLot[lotCode]) return;
@@ -766,12 +828,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, []);
 
   React.useEffect(() => {
-    if (initialLotId) {
+    if (lotEditMode === 'create' && lotDraft) return;
+    if (selectedLotId && lotList.some((lot) => lot.id === selectedLotId)) return;
+    if (initialLotId && lotList.some((lot) => lot.id === initialLotId)) {
       setSelectedLotId(initialLotId);
       return;
     }
-    if (lotEditMode === 'create' && lotDraft) return;
-    if (selectedLotId && lotList.some((lot) => lot.id === selectedLotId)) return;
     setSelectedLotId(lotList.find((lot) => lot.statut !== 'epuise')?.id ?? null);
   }, [initialLotId, lotDraft, lotEditMode, lotList, selectedLotId]);
 
@@ -821,19 +883,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [onToggleSave]);
 
   React.useEffect(() => {
-    setLocalTimeline(
-      ensureTimelineIds(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline)
-    );
-    setLotStepDatesByLot({});
-    setPendingJourneyImages((current) => {
-      Object.values(current).forEach((entry) => {
-        if (entry.previewUrl.startsWith('blob:')) {
-          URL.revokeObjectURL(entry.previewUrl);
-        }
-      });
-      return {};
-    });
-  }, [detail, ensureTimelineIds, fallbackTimeline]);
+    resetTimelineEdits();
+  }, [resetTimelineEdits]);
 
   React.useEffect(() => {
     if (!activeLotId || !activeLotPersisted) return;
@@ -860,7 +911,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   const baseTimeline =
     detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline;
-  const timelineDisplay = editMode ? localTimeline : baseTimeline;
+  const timelineDisplay = editMode ? localTimeline : timelineOverride ?? baseTimeline;
   const lotStepDates = activeLotId ? lotStepDatesByLot[activeLotId] ?? {} : {};
   const lotTimelineDisplay = React.useMemo<TimelineStep[]>(
     () =>
@@ -2221,6 +2272,119 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
     setLotMode(false);
   };
 
+  const persistJourneySteps = React.useCallback(
+    async (productId: string) => {
+      if (!supabaseClient) return null;
+
+      const resolvedTimeline: TimelineStep[] = [];
+      const normalizedSteps = [];
+
+      for (const [index, step] of localTimeline.entries()) {
+        let resolvedStep = step;
+        if (!Number.isFinite(step.lat) || !Number.isFinite(step.lng)) {
+          const query = buildStepLocationQuery(step);
+          if (query) {
+            const coords = await geocodeLocation(query);
+            if (coords) {
+              resolvedStep = { ...step, lat: coords.lat, lng: coords.lng };
+            }
+          }
+        }
+        resolvedTimeline.push(resolvedStep);
+        const stepLabel = (resolvedStep.etape || '').trim() || 'Etape';
+        const description = resolvedStep.description?.trim() || null;
+        const locationPayload = buildJourneyLocationPayload(resolvedStep);
+        const hasEvidence = Boolean(resolvedStep.preuve?.url);
+        normalizedSteps.push({
+          step: resolvedStep,
+          index,
+          stepLabel,
+          description,
+          locationPayload,
+          hasEvidence,
+        });
+      }
+
+      const { data: existingRows, error: existingError } = await supabaseClient
+        .from('product_journey_steps')
+        .select('id')
+        .eq('product_id', productId);
+      if (existingError) {
+        throw existingError;
+      }
+
+      const existingIds = new Set((existingRows ?? []).map((row) => row.id));
+      const keepIds = new Set(
+        normalizedSteps
+          .map((entry) => entry.step.journeyStepId)
+          .filter(Boolean) as string[]
+      );
+      const stepsToDelete = Array.from(existingIds).filter((id) => !keepIds.has(id));
+      if (stepsToDelete.length) {
+        const { error: traceDeleteError } = await supabaseClient
+          .from('lot_trace_steps')
+          .delete()
+          .in('product_step_id', stepsToDelete);
+        if (traceDeleteError) {
+          throw traceDeleteError;
+        }
+
+        const { error: deleteError } = await supabaseClient
+          .from('product_journey_steps')
+          .delete()
+          .in('id', stepsToDelete);
+        if (deleteError) {
+          throw deleteError;
+        }
+      }
+
+      const insertedSteps: Array<{ index: number; id: string }> = [];
+      for (const entry of normalizedSteps) {
+        const basePayload = {
+          step_label: entry.stepLabel,
+          description: entry.description,
+          sort_order: entry.index,
+          ...entry.locationPayload,
+        };
+        const payload = entry.hasEvidence
+          ? { ...basePayload, evidence_label: entry.stepLabel }
+          : basePayload;
+
+        if (entry.step.journeyStepId) {
+          const { error: updateError } = await supabaseClient
+            .from('product_journey_steps')
+            .update(payload)
+            .eq('id', entry.step.journeyStepId);
+          if (updateError) {
+            throw updateError;
+          }
+        } else {
+          const { data: created, error: createError } = await supabaseClient
+            .from('product_journey_steps')
+            .insert({
+              product_id: productId,
+              ...payload,
+            })
+            .select('id')
+            .maybeSingle();
+          if (createError || !created?.id) {
+            throw createError ?? new Error("Impossible de creer l'etape.");
+          }
+          insertedSteps.push({ index: entry.index, id: created.id });
+        }
+      }
+
+      const nextTimeline = resolvedTimeline.map((step, idx) => {
+        const inserted = insertedSteps.find((entry) => entry.index === idx);
+        return inserted ? { ...step, journeyStepId: inserted.id } : step;
+      });
+
+      setLocalTimeline(nextTimeline);
+      return nextTimeline;
+    },
+    [buildJourneyLocationPayload, localTimeline, supabaseClient]
+  );
+
   const handleSaveEdit = async () => {
     if (isCreateMode) {
       if (!onCreateProduct) return;
@@ -2282,6 +2446,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         throw updateError;
       }
 
+      const persistedTimeline = await persistJourneySteps(productRow.id);
+      setTimelineOverride(persistedTimeline ?? localTimeline);
       setEditMode(false);
       toast.success('Modifications enregistrees.');
       if (notifyFollowers && !notificationMessage.trim()) {
@@ -2298,6 +2464,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       resetCreateForm();
       return;
     }
+    resetTimelineEdits();
     setEditMode(false);
   };
 
@@ -2317,19 +2484,29 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
     return 0;
   }, []);
 
+  const resolveLotStartTimestamp = React.useCallback((lot: ProductionLot) => {
+    const candidates = [lot.periodeDisponibilite?.debut, lot.debut];
+    for (const value of candidates) {
+      if (!value) continue;
+      const timestamp = Date.parse(value);
+      if (Number.isFinite(timestamp)) return timestamp;
+    }
+    return 0;
+  }, []);
+
   const latestLotId = React.useMemo(() => {
     if (!lotList.length) return null;
     let latest = lotList[0];
-    let latestTimestamp = resolveLotTimestamp(latest);
+    let latestTimestamp = resolveLotStartTimestamp(latest);
     lotList.slice(1).forEach((lot) => {
-      const timestamp = resolveLotTimestamp(lot);
+      const timestamp = resolveLotStartTimestamp(lot);
       if (timestamp >= latestTimestamp) {
         latest = lot;
         latestTimestamp = timestamp;
       }
     });
     return latest.id;
-  }, [lotList, resolveLotTimestamp]);
+  }, [lotList, resolveLotStartTimestamp]);
 
   const cloneLotLabels = (labels: ProducerLabelDetail[]) => labels.map((label) => ({ ...label }));
   const cloneLotPosts = (posts: RepartitionPoste[]) => posts.map((post) => ({ ...post }));
@@ -2348,7 +2525,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
 
   const handleAddLot = () => {
     const draft = createLotDraft();
-    const referenceLotId = selectedLotId ?? latestLotId ?? null;
+    const referenceLotId = latestLotId ?? selectedLotId ?? null;
     const baseLabelDetails =
       referenceLotId && lotLabelsByLot[referenceLotId]
         ? lotLabelsByLot[referenceLotId]
@@ -2452,7 +2629,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         if (lotEditMode === 'edit') {
           return prev.map((item) => (item.id === normalized.id ? normalized : item));
         }
-        return [normalized, ...prev];
+        return [...prev, normalized];
       });
       setSelectedLotId(normalized.id);
       setLotStepDatesByLot((prev) => (prev[normalized.id] ? prev : { ...prev, [normalized.id]: {} }));
@@ -2609,7 +2786,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         const { [draftId]: draftSteps, ...rest } = prev;
         return { ...rest, [persisted.id]: draftSteps ?? {} };
       });
-      setLotList((prev) => [persisted, ...prev]);
+      setLotList((prev) => [...prev, persisted]);
       setSelectedLotId(persisted.id);
       if (options?.keepDraft) {
         setLotDraft(persisted);
@@ -2723,16 +2900,16 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       epuise: 2,
     };
     return [...lotList].sort((a, b) => {
+      const dateDiff = resolveLotStartTimestamp(a) - resolveLotStartTimestamp(b);
+      if (dateDiff !== 0) return dateDiff;
       const rankDiff = statusRank[a.statut] - statusRank[b.statut];
       if (rankDiff !== 0) return rankDiff;
-      const dateDiff = resolveLotTimestamp(b) - resolveLotTimestamp(a);
-      if (dateDiff !== 0) return dateDiff;
       return a.nomLot.localeCompare(b.nomLot);
     });
-  }, [lotList, resolveLotTimestamp]);
+  }, [lotList, resolveLotStartTimestamp]);
 
   const lotCarouselItems = React.useMemo(
-    () => [{ type: 'create' as const }, ...sortedLots.map((lot) => ({ type: 'lot' as const, lot }))],
+    () => [...sortedLots.map((lot) => ({ type: 'lot' as const, lot })), { type: 'create' as const }],
     [sortedLots]
   );
 
@@ -2751,6 +2928,21 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   React.useEffect(() => {
     setLotCarouselIndex((prev) => Math.min(prev, maxLotCarouselIndex));
   }, [maxLotCarouselIndex]);
+
+  React.useEffect(() => {
+    if (!selectedLotId) return;
+    const selectedIndex = lotCarouselItems.findIndex(
+      (item) => item.type === 'lot' && item.lot.id === selectedLotId
+    );
+    if (selectedIndex < 0) return;
+    setLotCarouselIndex((current) => {
+      if (selectedIndex < current) return selectedIndex;
+      if (selectedIndex >= current + lotVisibleCount) {
+        return Math.min(selectedIndex - lotVisibleCount + 1, maxLotCarouselIndex);
+      }
+      return current;
+    });
+  }, [lotCarouselItems, lotVisibleCount, maxLotCarouselIndex, selectedLotId]);
 
   const goLotLeft = () => {
     if (!canLotScrollLeft) return;
@@ -2848,28 +3040,6 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
             </p>
           )}
         </div>
-        {isOwner && editMode ? (
-          <div className="pd-row pd-row--wrap pd-gap-sm">
-            <div className="pd-stack pd-stack--xs">
-              <p className="pd-label">Taux de TVA</p>
-              <select
-                className="pd-select"
-                value={resolvedVatRate}
-                onChange={(e) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    vatRate: Number(e.target.value),
-                  }))
-                }
-              >
-                <option value={0}>0%</option>
-                <option value={0.055}>5,5%</option>
-                <option value={0.1}>10%</option>
-                <option value={0.2}>20%</option>
-              </select>
-            </div>
-          </div>
-        ) : null}
         {isLotManagement ? (
           <div className="pd-card pd-stack pd-stack--md">
             <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
@@ -3388,8 +3558,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
             <p className="pd-text-xs pd-text-muted">
               {isLotManagement
                 ? activeLot
-                  ? `Lot selectionne : ${activeLot.nomLot || 'Nouveau lot'}`
-                  : 'Selectionnez un lot pour modifier la repartition.'
+                  ? `Lot sélectionné : ${activeLot.nomLot || 'Nouveau lot'}`
+                  : 'Sélectionnez un lot pour modifier la répartition.'
                 : display.repartitionValeur?.postes?.length
                   ? `Pour chaque ${display.repartitionValeur.uniteReference} - ${
                       display.repartitionValeur.mode === 'detaille' ? 'Montants exacts' : 'Montants estimatifs'
@@ -3660,14 +3830,14 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   placeholder="DLC estimee"
                 />
               ) : (
-                <p className="pd-text-body">DLC estimee : {display.dlcEstimee || '-'}</p>
+                <p className="pd-text-body">DLC estimée : {display.dlcEstimee || '-'}</p>
               )}
               {isLotManagement ? (
                 display.dlcEstimee ? (
                   <p className="pd-text-xs pd-text-muted">Produit : {display.dlcEstimee}</p>
                 ) : null
               ) : activeLot?.DLC_DDM ? (
-                <p className="pd-text-xs pd-text-muted">Lot selectionne : {activeLot.DLC_DDM}</p>
+                <p className="pd-text-xs pd-text-muted">Lot sélectionné : {activeLot.DLC_DDM}</p>
               ) : null}
             </div>
             <div className="pd-info-card pd-stack pd-stack--xs">
@@ -3905,7 +4075,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         >
           <Heart className="header-action-icon" />
           <span className="header-action-label">
-            {isSaved ? 'Dans ma selection' : 'Ajouter a ma selection'}
+            {isSaved ? 'Dans ma sélection' : 'Ajouter a ma sélection'}
           </span>
         </button>
         {isOwner ? (
@@ -4024,7 +4194,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   <div className="pd-stack pd-stack--xs">
                     <p className="pd-section-title">Gestion des lots</p>
                     <p className="pd-text-xs pd-text-muted">
-                      Modifiez les informations du lot selectionne avant d'enregistrer.
+                      Modifiez les informations du lot sélectionné avant d'enregistrer.
                     </p>
                   </div>
                 </div>
@@ -4145,7 +4315,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                 </>
               ) : (
                 <p className="pd-text-sm pd-text-muted">
-                  Selectionnez un lot dans le carrousel ou creez-en un nouveau.
+                  Sélectionnez un lot pour le modifier ou créez-en un nouveau.
                 </p>
               )}
             </div>
@@ -4155,7 +4325,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   <Package className="pd-icon pd-icon--accent" />
                   <p className="pd-section-title">Lots</p>
                 </div>
-                <p className="pd-text-xs pd-text-muted">Faites defiler pour changer de lot.</p>
+                <p className="pd-text-xs pd-text-muted">Sélectionnez votre lot.</p>
               </div>
               <div
                 className={`pd-lot-carousel${lotCarouselHover ? ' pd-lot-carousel--hover' : ''}`}
@@ -4185,10 +4355,10 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                           >
                             <div className="pd-row pd-gap-sm">
                               <Plus size={16} />
-                              <p className="pd-text-strong">Creer un nouveau lot</p>
+                              <p className="pd-text-strong">Créer un nouveau lot</p>
                             </div>
                             <p className="pd-text-xs pd-text-muted">
-                              Duplique labels et repartition du lot precedent.
+                              Duplique les labels et la répartition du prix du lot précèdent.
                             </p>
                           </button>
                         );
@@ -4384,6 +4554,26 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       placeholder="Ex : 0.25"
                     />
                   </label>
+                  {isOwner ? (
+                    <label className="pd-stack pd-stack--xs">
+                      <span className="pd-label">Taux de TVA</span>
+                      <select
+                        className="pd-select"
+                        value={resolvedVatRate}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            vatRate: Number(e.target.value),
+                          }))
+                        }
+                      >
+                        <option value={0}>0%</option>
+                        <option value={0.055}>5,5%</option>
+                        <option value={0.1}>10%</option>
+                        <option value={0.2}>20%</option>
+                      </select>
+                    </label>
+                  ) : null}
                 </div>
               </>
             ) : (
@@ -4414,7 +4604,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                     actionButtonsDisabled ? 'pd-btn--disabled' : 'pd-btn--primary'
                   }`}
                 >
-                  Creer une commande avec ce produit
+                  Créer une commande avec ce produit
                 </button>
                 <button
                   type="button"

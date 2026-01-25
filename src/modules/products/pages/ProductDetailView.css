@@ -629,17 +629,18 @@
   width: 100%;
   text-align: left;
   cursor: pointer;
-  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+  transition: box-shadow 120ms ease, border-color 120ms ease, background-color 120ms ease;
 }
 
 .pd-lot-card--selectable:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 24px -18px rgba(31, 41, 55, 0.35);
+  border-color: #FFD6C9;
+  box-shadow: inset 0 0 0 2px rgba(255, 107, 74, 0.35);
 }
 
 .pd-lot-card--active {
   border-color: #FF6B4A;
-  box-shadow: 0 14px 26px -18px rgba(255, 107, 74, 0.45);
+  box-shadow: inset 0 0 0 2px #FF6B4A;
+  background: #FFF7F2;
 }
 
 .pd-lot-card--create {

@@ -7,15 +7,23 @@ type NotificationItem = {
   message: string;
   time: string;
   unread?: boolean;
+  orderId?: string | null;
+  orderCode?: string | null;
 };
 
 interface NotificationsPopoverProps {
   open: boolean;
   onClose: () => void;
   notifications: NotificationItem[];
+  onNotificationClick?: (notification: NotificationItem) => void;
 }
 
-export function NotificationsPopover({ open, onClose, notifications }: NotificationsPopoverProps) {
+export function NotificationsPopover({
+  open,
+  onClose,
+  notifications,
+  onNotificationClick,
+}: NotificationsPopoverProps) {
   const notificationsAnchor =
     typeof document !== 'undefined' ? document.getElementById('notifications-anchor') : null;
   const popoverRef = React.useRef<HTMLDivElement | null>(null);
@@ -111,41 +119,64 @@ export function NotificationsPopover({ open, onClose, notifications }: Notificat
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
-          {notifications.map((notification) => (
-            <div
-              key={notification.id}
-              style={{
-                display: 'flex',
-                gap: 12,
-                padding: '10px 12px',
-                borderRadius: 12,
-                border: '1px solid #E5E7EB',
-                background: notification.unread ? '#FFF1E6' : '#FFFFFF',
-              }}
-            >
-              <span
+          {notifications.map((notification) => {
+            const isClickable = Boolean((notification.orderCode || notification.orderId) && onNotificationClick);
+            const sharedStyles: React.CSSProperties = {
+              display: 'flex',
+              gap: 12,
+              padding: '10px 12px',
+              borderRadius: 12,
+              border: '1px solid #E5E7EB',
+              background: notification.unread ? '#FFF1E6' : '#FFFFFF',
+              textAlign: 'left',
+              width: '100%',
+            };
+            const content = (
+              <>
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: '50%',
+                    background: notification.unread ? '#FF6B4A' : '#E5E7EB',
+                    marginTop: 6,
+                    flexShrink: 0,
+                  }}
+                />
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontSize: 14, fontWeight: 600, color: '#1F2937', margin: 0 }}>
+                    {notification.title}
+                  </p>
+                  <p style={{ fontSize: 12, color: '#6B7280', margin: '4px 0 0' }}>
+                    {notification.message}
+                  </p>
+                  <p style={{ fontSize: 11, color: '#9CA3AF', margin: '6px 0 0' }}>
+                    {notification.time}
+                  </p>
+                </div>
+              </>
+            );
+            if (!isClickable) {
+              return (
+                <div key={notification.id} style={sharedStyles}>
+                  {content}
+                </div>
+              );
+            }
+            return (
+              <button
+                key={notification.id}
+                type="button"
+                onClick={() => onNotificationClick?.(notification)}
                 style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: '50%',
-                  background: notification.unread ? '#FF6B4A' : '#E5E7EB',
-                  marginTop: 6,
-                  flexShrink: 0,
+                  ...sharedStyles,
+                  cursor: 'pointer',
                 }}
-              />
-              <div style={{ flex: 1 }}>
-                <p style={{ fontSize: 14, fontWeight: 600, color: '#1F2937', margin: 0 }}>
-                  {notification.title}
-                </p>
-                <p style={{ fontSize: 12, color: '#6B7280', margin: '4px 0 0' }}>
-                  {notification.message}
-                </p>
-                <p style={{ fontSize: 11, color: '#9CA3AF', margin: '6px 0 0' }}>
-                  {notification.time}
-                </p>
-              </div>
-            </div>
-          ))}
+              >
+                {content}
+              </button>
+            );
+          })}
         </div>
       )}
 

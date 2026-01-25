@@ -21,14 +21,15 @@ import { ProductResultCard } from '../../products/components/ProductGroup';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../../../shared/constants/cards';
 import { toast } from 'sonner';
-import { ImageWithFallback } from '../../../shared/ui/ImageWithFallback';
 import './OrderClientView.css';
 import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { getOrderStatusLabel, getOrderStatusProgress } from '../utils/orderStatus';
 import {
   addItem,
   approveParticipation,
+  createPlatformInvoiceForOrder,
   createPaymentStub,
+  finalizePaymentSimulation,
   fetchParticipantInvoices,
   fetchProducerInvoices,
   getInvoiceDownloadUrl,
@@ -36,7 +37,6 @@ import {
   rejectParticipation,
   requestParticipation,
   setParticipantPickupSlot,
-  updatePaymentStatus,
   updateParticipantsVisibility,
   updateOrderParticipantSettings,
   updateOrderStatus,
@@ -134,11 +134,37 @@ const resolveOrderEffectiveWeightKg = (
   return Math.max(current, min);
 };
 
+const PAID_PAYMENT_STATUSES = new Set(['paid', 'authorized']);
+
+const sumPaidCentsForParticipant = (payments: OrderFull['payments'], participantId?: string | null) => {
+  if (!participantId) return 0;
+  return payments.reduce(
+    (sum, payment) =>
+      payment.participantId === participantId && PAID_PAYMENT_STATUSES.has(payment.status)
+        ? sum + payment.amountCents
+        : sum,
+    0
+  );
+};
+
 const ORDER_DELIVERY_OPTION_LABELS = {
   chronofresh: 'Chronofresh',
   producer_delivery: 'Livraison producteur',
   producer_pickup: 'Retrait par le partageur',
 } as const;
+
+const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  draft: 'Brouillon',
+  open: 'Ouverte',
+  locked: 'Clôturée',
+  confirmed: 'Confirmée',
+  preparing: 'En préparation',
+  prepared: 'En livraison',
+  delivered: 'Livrée au partageur',
+  distributed: 'Distribuée',
+  finished: 'Terminée',
+  cancelled: 'Annulée',
+};
 
 const ORDER_CARD_WIDTH = CARD_WIDTH;
 
@@ -151,13 +177,16 @@ type ParticipantVisibility = {
 
 type OrderParticipant = {
   id: string;
+  profileId?: string | null;
   name: string;
   handle?: string;
-  avatarUrl?: string;
+  avatarPath?: string | null;
+  avatarUpdatedAt?: string | null;
   quantities: Record<string, number>;
   totalWeight: number;
   totalAmount: number;
   pickupCode: string | null;
+  role: 'sharer' | 'participant';
 };
 
 const defaultParticipantVisibility: ParticipantVisibility = {
@@ -352,6 +381,10 @@ export function OrderClientView({
   });
 
 const profiles = orderFullValue.profiles ?? {};
+const getProfileMeta = React.useCallback(
+  (profileId?: string | null) => (profileId ? profiles[profileId] ?? null : null),
+  [profiles]
+);
 
 const sharerProfileId = order.sharerProfileId;
 const sharerProfileMeta = sharerProfileId ? profiles[sharerProfileId] : undefined;
@@ -392,6 +425,7 @@ const sharerAvatarUpdatedAt =
   const myParticipant = currentUser
     ? orderFullValue.participants.find((participant) => participant.profileId === currentUser.id)
     : undefined;
+  const isVisitor = !isOwner && !isProducer && !myParticipant;
   const participantInvoice = participantInvoices[0] ?? null;
   const producerInvoice = producerInvoices[0] ?? null;
   const producerProfileMeta =
@@ -455,14 +489,16 @@ const sharerAvatarUpdatedAt =
   const shouldShowParticipationRequestButton =
     !isOwner && !myParticipant && !autoApproveParticipationRequests;
 
-  const isOrderClosed =
-    order.status === 'locked' ||
-    order.status === 'confirmed' ||
-    order.status === 'preparing' ||
-    order.status === 'prepared' ||
-    order.status === 'delivered' ||
-    order.status === 'distributed' ||
-    order.status === 'finished';
+  const isOrderOpen = order.status === 'open';
+  const isAfterLocked = [
+    'confirmed',
+    'preparing',
+    'prepared',
+    'delivered',
+    'distributed',
+    'finished',
+  ].includes(order.status);
+  const shouldRestrictAccess = isVisitor && isAfterLocked;
 
   const orderEffectiveWeightKg = React.useMemo(
     () => resolveOrderEffectiveWeightKg(order.orderedWeightKg ?? 0, order.minWeightKg, order.maxWeightKg),
@@ -504,6 +540,7 @@ const sharerAvatarUpdatedAt =
     [products, quantities, unitPriceCentsById]
   );
   const totalPrice = centsToEuros(totalPriceCents);
+  const remainingToPayCents = totalPriceCents;
 
   const alreadyOrderedWeight = order.orderedWeightKg ?? 0;
 
@@ -526,6 +563,8 @@ const sharerAvatarUpdatedAt =
   const extraPercent = Math.max(0, progressPercent - 100);
   const remainingWeight = Math.max(order.minWeightKg - totalWeightTowardsGoal, 0);
   const isMinimumReached = order.minWeightKg <= 0 || alreadyOrderedWeight >= order.minWeightKg;
+  const maxWeightLabel =
+    typeof order.maxWeightKg === 'number' ? `${order.maxWeightKg} kg` : 'sans limite';
   const participantTotalsCents = React.useMemo(
     () =>
       orderFullValue.participants.reduce(
@@ -574,7 +613,7 @@ const sharerAvatarUpdatedAt =
   };
 
   const handleQuantityChange = (productId: string, delta: number) => {
-    if (isOrderClosed) return;
+    if (!isOrderOpen) return;
     setQuantities((prev) => {
       const current = prev[productId] ?? 0;
       const next = Math.max(0, current + delta);
@@ -670,7 +709,7 @@ const sharerAvatarUpdatedAt =
     updateOrderStatus(order.id, 'locked')
       .then((updatedStatus) => {
         updateOrderLocal({ status: updatedStatus });
-        toast.success('Commande cloturee.');
+        toast.success('Commande cloturée.');
       })
       .catch((error) => {
         console.error('Order status update error:', error);
@@ -683,8 +722,16 @@ const sharerAvatarUpdatedAt =
     if (isWorking) return;
     setIsWorking(true);
     updateOrderStatus(order.id, nextStatus)
-      .then((updatedStatus) => {
+      .then(async (updatedStatus) => {
         updateOrderLocal({ status: updatedStatus });
+        if (nextStatus === 'distributed') {
+          try {
+            await createPlatformInvoiceForOrder(order.id);
+          } catch (error) {
+            console.error('Platform invoice error:', error);
+            toast.error("Impossible d'emettre la facture plateforme.");
+          }
+        }
         toast.success(successMessage);
       })
       .catch((error) => {
@@ -714,14 +761,14 @@ const sharerAvatarUpdatedAt =
           id: 'producer-preparing',
           label: 'Démarrer la préparation',
           nextStatus: 'preparing',
-          successMessage: 'Préparation demarrée.',
+          successMessage: 'Préparation démarrée.',
         });
       } else if (order.status === 'preparing') {
         actions.push({
           id: 'producer-prepared',
-          label: 'Commencer à livrer',
+          label: 'Marquer comme préparée',
           nextStatus: 'prepared',
-          successMessage: 'La commande est désormais en train de se faire livrer.',
+          successMessage: 'Commande marquée comme préparée.',
         });
       }
     }
@@ -729,16 +776,16 @@ const sharerAvatarUpdatedAt =
       if (order.status === 'prepared') {
         actions.push({
           id: 'owner-delivered',
-          label: 'Commande livrée',
+          label: 'Marquer comme livrée (réceptionnée)',
           nextStatus: 'delivered',
-          successMessage: 'La commande a bien été réceptionnée.',
+          successMessage: 'Commande livrée et réceptionnée.',
         });
       } else if (order.status === 'delivered') {
         actions.push({
           id: 'owner-distributed',
-          label: 'Commande distribuée',
+          label: 'Marquer comme distribuée',
           nextStatus: 'distributed',
-          successMessage: 'Les participants ont récupéré leur commande.',
+          successMessage: 'Commande marquée comme distribuée.',
         });
       } else if (order.status === 'distributed') {
         actions.push({
@@ -753,18 +800,22 @@ const sharerAvatarUpdatedAt =
   }, [isOwner, isProducer, order.status]);
 
   const handlePurchase = async () => {
-    if (isOrderClosed) {
-      toast.info('La commande est cloturee.');
+    if (!isOrderOpen) {
+      toast.info("La commande n'est pas ouverte.");
       return;
     }
     if (totalCards === 0) {
       toast.info('Ajoutez au moins une carte avant de valider.');
       return;
     }
+    if (remainingToPayCents <= 0) {
+      toast.info('Rien a payer pour le moment.');
+      return;
+    }
     if (onStartPayment) {
       onStartPayment({
         quantities: { ...quantities },
-        total: totalPrice,
+        total: centsToEuros(remainingToPayCents),
         weight: selectedWeight,
       });
       return;
@@ -821,12 +872,16 @@ const sharerAvatarUpdatedAt =
       setOrderFull(refreshed);
       const refreshedParticipant = refreshed.participants.find((p) => p.id === participant.id);
       if (refreshedParticipant) {
-        const payment = await createPaymentStub({
-          orderId: order.id,
-          participantId: refreshedParticipant.id,
-          amountCents: refreshedParticipant.totalAmountCents,
-        });
-        await updatePaymentStatus(payment.id, 'paid');
+        const refreshedPaidCents = sumPaidCentsForParticipant(refreshed.payments, refreshedParticipant.id);
+        const amountCentsToPay = Math.max(0, refreshedParticipant.totalAmountCents - refreshedPaidCents);
+        if (amountCentsToPay > 0) {
+          const payment = await createPaymentStub({
+            orderId: order.id,
+            participantId: refreshedParticipant.id,
+            amountCents: amountCentsToPay,
+          });
+          await finalizePaymentSimulation(payment.id);
+        }
         const updated = await getOrderFullByCode(order.orderCode);
         setOrderFull(updated);
         await loadInvoices(updated.order.id, updated.order.producerProfileId);
@@ -912,33 +967,64 @@ const sharerAvatarUpdatedAt =
     try {
       const url = await getInvoiceDownloadUrl(invoice);
       if (!url) {
-        toast.info('PDF en cours de generation.');
+        toast.info('PDF en cours de génération.');
         return;
       }
       window.open(url, '_blank', 'noopener,noreferrer');
     } catch (error) {
       console.error('Invoice download error:', error);
-      toast.error('Impossible de telecharger la facture.');
+      toast.error('Impossible de télécharger la facture.');
     }
   };
 
-  const pickupAddress =
+  const handleParticipantInvoiceDownload = async (participant: OrderParticipant) => {
+    if (!participant.profileId) {
+      toast.info('Facture indisponible pour ce participant.');
+      return;
+    }
+    setIsInvoiceLoading(true);
+    try {
+      const invoices = await fetchParticipantInvoices(order.id, participant.profileId);
+      const invoice = invoices[0];
+      if (!invoice) {
+        toast.info('Aucune facture disponible pour ce participant.');
+        return;
+      }
+      await handleInvoiceDownload(invoice);
+    } catch (error) {
+      console.error('Participant invoice error:', error);
+      toast.error('Impossible de charger la facture du participant.');
+    } finally {
+      setIsInvoiceLoading(false);
+    }
+  };
+
+  const canViewFullAddress = isOwner || isProducer || Boolean(myParticipant);
+  const pickupCityLine = [order.pickupPostcode, order.pickupCity].filter(Boolean).join(' ').trim();
+  const deliveryCityLine = [order.deliveryPostcode, order.deliveryCity].filter(Boolean).join(' ').trim();
+  const visitorSlotCityLabel = order.deliveryOption === 'producer_pickup' ? pickupCityLine : deliveryCityLine;
+  const cityFallbackLabel = 'Ville communiquée ultérieurement';
+
+  const pickupAddressFull =
     order.pickupAddress ||
     [order.pickupStreet, [order.pickupPostcode, order.pickupCity].filter(Boolean).join(' ') || undefined]
       .filter(Boolean)
       .join(', ') ||
     [order.pickupPostcode, order.pickupCity].filter(Boolean).join(' ') ||
-    'Lieu précis communiqué aprÃ¨s paiement';
+    'Lieu précis communiqué après paiement';
 
-  const deliveryAddress =
+  const deliveryAddressFull =
     [order.deliveryStreet, [order.deliveryPostcode, order.deliveryCity].filter(Boolean).join(' ') || undefined]
       .filter(Boolean)
       .join(', ') ||
     order.deliveryAddress ||
-    'Adresse non renseignee';
+    'Adresse non renseignée';
+  const pickupAddress = canViewFullAddress ? pickupAddressFull : pickupCityLine || cityFallbackLabel;
+  const deliveryAddress = canViewFullAddress ? deliveryAddressFull : deliveryCityLine || cityFallbackLabel;
   const deliveryInfo = order.deliveryInfo?.trim() || '';
   const pickupInfo = order.pickupInfo?.trim() || '';
   const deliveryModeLabel = ORDER_DELIVERY_OPTION_LABELS[order.deliveryOption] ?? 'Livraison';
+  const locationAddress = order.deliveryOption === 'producer_pickup' ? pickupAddress : deliveryAddress;
 
   const estimatedDeliveryDate =
     order.estimatedDeliveryDate instanceof Date
@@ -994,36 +1080,64 @@ const sharerAvatarUpdatedAt =
     pickupDurationLabel && pickupWindowEndDate
       ? `${pickupDurationLabel} (jusqu'au ${pickupWindowEndDate.toLocaleDateString('fr-FR')})`
       : pickupDurationLabel;
+  const isPickupSelectionOpen = ['delivered', 'distributed', 'finished'].includes(order.status);
+  const canSelectPickupSlot = isPickupSelectionOpen && Boolean(myParticipant);
+  const shouldHidePickupSlots = isVisitor;
+  const pickupSlotStatusLabel =
+    myParticipant?.pickupSlotStatus === 'accepted'
+      ? 'Accepté'
+      : myParticipant?.pickupSlotStatus === 'rejected'
+        ? 'Refusé'
+        : myParticipant?.pickupSlotStatus === 'requested'
+          ? 'En attente'
+          : null;
   const deliveryDetailLines = React.useMemo(() => {
+    if (!canViewFullAddress) {
+      const lines: string[] = [];
+      if (order.deliveryOption === 'producer_pickup') {
+        const cityLine = pickupCityLine || deliveryCityLine;
+        if (cityLine) lines.push(`Ville de retrait : ${cityLine}`);
+        if (pickupWindowLabel) lines.push(`Fenêtre de retrait : ${pickupWindowLabel}`);
+      } else {
+        if (deliveryCityLine) lines.push(`Ville de livraison : ${deliveryCityLine}`);
+        if (deliveryDateLabel) lines.push(`Livraison estimée : ${deliveryDateLabel}`);
+      }
+      return lines;
+    }
     const lines = [`Adresse de livraison : ${deliveryAddress}`];
     if (deliveryInfo) lines.push(`Infos livraison : ${deliveryInfo}`);
     if (order.deliveryOption === 'producer_pickup') {
       if (pickupAddress) lines.push(`Adresse de retrait : ${pickupAddress}`);
       if (pickupInfo) lines.push(`Infos retrait : ${pickupInfo}`);
-      if (pickupWindowLabel) lines.push(`Fenetre de retrait : ${pickupWindowLabel}`);
+      if (pickupWindowLabel) lines.push(`Fenêtre de retrait : ${pickupWindowLabel}`);
     } else if (deliveryDateLabel) {
-      lines.push(`Livraison estimee : ${deliveryDateLabel}`);
+      lines.push(`Livraison estimée : ${deliveryDateLabel}`);
     }
     return lines;
   }, [
+    canViewFullAddress,
     deliveryAddress,
-    deliveryInfo,
+    deliveryCityLine,
     deliveryDateLabel,
+    deliveryInfo,
     order.deliveryOption,
     pickupAddress,
+    pickupCityLine,
     pickupInfo,
     pickupWindowLabel,
   ]);
   const pickupLine = deliveryDateLabel
-    ? `Livraison estimee : ${deliveryDateLabel}`
+    ? `Livraison estimée : ${deliveryDateLabel}`
     : hasPickupSlots
-      ? 'Retrait planifie'
+      ? isPickupSelectionOpen
+        ? 'Choix de créneau disponible'
+        : 'Choix du créneau de récupération disponible après réception'
       : order.message || 'Voir message de retrait';
   const deadlineDate = order.deadline ?? new Date();
   const now = React.useMemo(() => new Date(), []);
   const daysLeft = Math.max(0, Math.ceil((deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
   const hasPassedDeadline = deadlineDate.getTime() < now.getTime();
-  const statusLabel = getOrderStatusLabel(order.status);
+  const statusLabel = ORDER_STATUS_LABELS[order.status] ?? getOrderStatusLabel(order.status);
   const statusTone =
     order.status === 'finished'
       ? 'success'
@@ -1051,6 +1165,7 @@ const sharerAvatarUpdatedAt =
   const showStatusProgress = canViewStatusProgress && statusProgress !== null;
   const statusProgressPercent = statusProgress ? Math.round(statusProgress.ratio * 100) : 0;
   const statusProgressLabel = statusProgress ? `Etape ${statusProgress.step}/${statusProgress.total}` : '';
+  const shouldShowSupportCard = ['delivered', 'distributed', 'finished'].includes(order.status);
   const productCodeByDbId = React.useMemo(() => {
     const entries = orderFullValue.productsOffered.map((entry) => [
       entry.productId,
@@ -1070,22 +1185,26 @@ const sharerAvatarUpdatedAt =
         if (!code) return;
         quantities[code] = (quantities[code] ?? 0) + item.quantityUnits;
       });
+      const meta = getProfileMeta(participant.profileId);
       const displayName =
         participant.role === 'sharer'
-          ? `${participant.profileName ?? 'Partageur'} (partageur)`
-          : participant.profileName ?? 'Participant';
+          ? `${participant.profileName ?? meta?.name ?? 'Partageur'} (partageur)`
+          : participant.profileName ?? meta?.name ?? 'Participant';
       return {
         id: participant.id,
+        profileId: participant.profileId ?? null,
         name: displayName,
-        handle: participant.profileHandle ?? undefined,
-        avatarUrl: undefined,
+        handle: participant.profileHandle ?? meta?.handle ?? undefined,
+        avatarPath: participant.avatarPath ?? meta?.avatarPath ?? null,
+        avatarUpdatedAt: participant.avatarUpdatedAt ?? meta?.avatarUpdatedAt ?? null,
         quantities,
         totalAmount: centsToEuros(participant.totalAmountCents),
         totalWeight: participant.totalWeightKg,
         pickupCode: participant.pickupCode ?? null,
+        role: participant.role,
       };
     });
-  }, [orderFullValue.items, orderFullValue.participants, productCodeByDbId, products]);
+  }, [getProfileMeta, orderFullValue.items, orderFullValue.participants, productCodeByDbId, products]);
   const participantsWithTotals = participants;
   const pendingParticipants = orderFullValue.participants.filter(
     (participant) => participant.participationStatus === 'requested'
@@ -1108,9 +1227,9 @@ const sharerAvatarUpdatedAt =
       profile: false,
       content: true,
       weight: true,
-      amount: participantsVisibility.amount,
+      amount: true,
     }),
-    [participantsVisibility.amount]
+    []
   );
   const viewerVisibility = isOwner
     ? ownerVisibility
@@ -1124,6 +1243,9 @@ const sharerAvatarUpdatedAt =
   const participantsCountLabel = participantsWithTotals.length
     ? `${participantsWithTotals.length} participant${participantsWithTotals.length > 1 ? 's' : ''}`
     : 'Aucun participant pour le moment';
+  const participantsCountFooterLabel = `${participantsWithTotals.length} participant${
+    participantsWithTotals.length > 1 ? 's' : ''
+  }`;
   const totalWeightAll = React.useMemo(
     () => participantsWithTotals.reduce((sum, participant) => sum + participant.totalWeight, 0),
     [participantsWithTotals]
@@ -1145,13 +1267,57 @@ const sharerAvatarUpdatedAt =
     [products, participants]
   );
   const shouldShowTotals = viewerVisibility.content || viewerVisibility.weight || viewerVisibility.amount;
+  const shouldShowInvoiceColumn = isProducer;
   const formatUnitsTotal = (value: number) =>
     Number.isInteger(value) ? String(value) : value.toFixed(2);
+  const canShowPreview = isAuthenticated && Boolean(myParticipant) && !isOwner && !isProducer;
+  const otherParticipants = React.useMemo(
+    () =>
+      orderFullValue.participants.filter(
+        (participant) =>
+          participant.role === 'participant' &&
+          participant.participationStatus === 'accepted' &&
+          participant.id !== myParticipant?.id
+      ),
+    [orderFullValue.participants, myParticipant?.id]
+  );
+  const otherParticipantIds = React.useMemo(
+    () => new Set(otherParticipants.map((participant) => participant.id)),
+    [otherParticipants]
+  );
+  const previewItems = React.useMemo(() => {
+    if (!canShowPreview || otherParticipantIds.size === 0) return [];
+    const totals = new Map<string, number>();
+    orderFullValue.items.forEach((item) => {
+      if (!otherParticipantIds.has(item.participantId)) return;
+      const code = productCodeByDbId.get(item.productId);
+      if (!code) return;
+      totals.set(code, (totals.get(code) ?? 0) + item.quantityUnits);
+    });
+    return products
+      .map((product) => {
+        const totalUnits = totals.get(product.id) ?? 0;
+        if (!totalUnits) return null;
+        const quantityLabel =
+          product.measurement === 'kg' ? `${totalUnits.toFixed(2)} kg` : formatUnitsTotal(totalUnits);
+        return { id: product.id, label: `${product.name} x ${quantityLabel}` };
+      })
+      .filter((entry): entry is { id: string; label: string } => Boolean(entry));
+  }, [canShowPreview, orderFullValue.items, otherParticipantIds, productCodeByDbId, products, formatUnitsTotal]);
+  const previewFallbackLabel = otherParticipants.length
+    ? `${otherParticipants.length} participant${otherParticipants.length > 1 ? 's' : ''} ${
+        otherParticipants.length > 1 ? 'ont' : 'a'
+      } déjà composé leur panier.`
+    : "Aucun autre participant n'a encore composé son panier.";
 
   const handleParticipantClick = (participant: OrderParticipant) => {
-    const target = participant.handle || participant.name;
+    const target = participant.handle ?? participant.name;
     if (!target) return;
-    onOpenParticipantProfile?.(target);
+    if (onOpenParticipantProfile) {
+      onOpenParticipantProfile(target);
+      return;
+    }
+    handleAvatarNavigation(participant.handle ?? null, participant.name);
   };
 
   if (isLoading) {
@@ -1170,6 +1336,14 @@ const sharerAvatarUpdatedAt =
     );
   }
 
+  if (shouldRestrictAccess) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 text-center text-sm text-[#6B7280]">
+        La commande est clôturée et en cours de préparation et de distribution
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 space-y-6 md:space-y-8">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -1182,6 +1356,9 @@ const sharerAvatarUpdatedAt =
           Retour
         </button>
         <div className="flex items-center gap-2 flex-wrap">
+          <span className={`order-client-view__status-pill ${statusColor}`}>
+            Statut : {statusLabel}
+          </span>
           {isOwner && (
             <>
               <button
@@ -1298,13 +1475,13 @@ const sharerAvatarUpdatedAt =
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
                   <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                    <Scale className="w-4 h-4 text-[#FF6B4A]" />
-                    Capacite
-                  </div>
-                  <p className="text-[#1F2937] font-semibold text-lg">
-                    {order.minWeightKg} kg - {order.maxWeightKg ?? 0} kg
-                  </p>
+                  <Scale className="w-4 h-4 text-[#FF6B4A]" />
+                  Capacité
                 </div>
+                <p className="text-[#1F2937] font-semibold text-lg">
+                  {order.minWeightKg} kg - {maxWeightLabel}
+                </p>
+              </div>
                 <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
                   <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
                     <CalendarClock className="w-4 h-4 text-[#FF6B4A]" />
@@ -1320,36 +1497,61 @@ const sharerAvatarUpdatedAt =
                 <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
                   <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
                     <MapPin className="w-4 h-4 text-[#FF6B4A]" />
-                    Retrait
+                    Retrait {locationAddress}
                   </div>
                   <p className="text-[#1F2937] font-semibold text-lg leading-tight">{pickupLine}</p>
                   {pickupWindowLabel && (
-                    <p className="text-xs text-[#6B7280]">Duree de recuperation : {pickupWindowLabel}</p>
+                    <p className="text-xs text-[#6B7280]">Période de recuperation : {pickupWindowLabel}</p>
                   )}
-                  {hasPickupSlots && (
+                  {hasPickupSlots && !shouldHidePickupSlots && (
                     <div className="order-client-view__pickup-slots">
                       <div className="order-client-view__pickup-slots-header">
-                        <span className="order-client-view__pickup-slots-title">Creneaux disponibles</span>
+                        <span className="order-client-view__pickup-slots-title">Créneaux disponibles</span>
                         <span className="order-client-view__pickup-slots-count">{pickupSlots.length}</span>
                       </div>
                       <div className="order-client-view__pickup-slots-grid">
-                        {pickupSlots.map((slot) => (
-                          <div
-                            key={slot.id}
-                            className={`order-client-view__pickup-slot ${
-                              slot.enabled ? '' : 'order-client-view__pickup-slot--disabled'
-                            }`}
-                          >
-                            <div>
-                              <p className="order-client-view__pickup-slot-date">{slot.label}</p>
-                              <p className="order-client-view__pickup-slot-time">{slot.timeLabel}</p>
-                            </div>
-                          </div>
-                        ))}
+                        {pickupSlots.map((slot) => {
+                          const isSelected = myParticipant?.pickupSlotId === slot.id;
+                          const isDisabled = !slot.enabled || !canSelectPickupSlot;
+                          return (
+                            <button
+                              key={slot.id}
+                              type="button"
+                              className={`order-client-view__pickup-slot ${
+                                isDisabled ? 'order-client-view__pickup-slot--disabled' : ''
+                              } ${isSelected ? 'order-client-view__pickup-slot--selected' : ''}`}
+                              onClick={() => {
+                                if (isDisabled || isWorking) return;
+                                handlePickupSlotSelect(slot.id);
+                              }}
+                              disabled={isDisabled || isWorking}
+                            >
+                              <div>
+                                <p className="order-client-view__pickup-slot-date">{slot.label}</p>
+                                <p className="order-client-view__pickup-slot-time">{slot.timeLabel}</p>
+                              </div>
+                              <div className="order-client-view__pickup-slot-status">
+                                {isSelected && (
+                                  <span className="order-client-view__pickup-slot-tag">Sélectionné</span>
+                                )}
+                                {isSelected && !autoApprovePickupSlots && pickupSlotStatusLabel && (
+                                  <span className="order-client-view__pickup-slot-tag order-client-view__pickup-slot-tag--pending">
+                                    Demande envoyée · {pickupSlotStatusLabel}
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
                       </div>
+                      {!isPickupSelectionOpen && (
+                        <p className="order-client-view__pickup-slots-note">
+                          Prise de rendez-vous sur les créneaux après réception des produits par le créateur de la
+                          commande. Tu pourras choisir ton créneau une fois les produits réceptionnés par le partageur.
+                        </p>
+                      )}
                     </div>
                   )}
-                  <p className="text-xs text-[#6B7280]">{pickupAddress}</p>
                 </div>
                 {isProducer && (
                   <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
@@ -1389,7 +1591,7 @@ const sharerAvatarUpdatedAt =
 
               {products.length === 0 ? (
                 <div className="bg-white border border-gray-100 rounded-2xl p-6 text-sm text-[#6B7280] shadow-sm">
-                  Aucun produit n'est associe a cette commande pour l'instant.
+                  Aucun produit n'est associé a cette commande pour l'instant.
                 </div>
               ) : (
                 <OrderProductsCarousel
@@ -1398,12 +1600,12 @@ const sharerAvatarUpdatedAt =
                   onDeltaQuantity={handleQuantityChange}
                   onDirectQuantity={(productId, value) =>
                     setQuantities((prev) => {
-                      if (isOrderClosed) return prev;
+                      if (!isOrderOpen) return prev;
                       return { ...prev, [productId]: Math.max(0, value) };
                     })
                   }
                   unitPriceLabelsById={unitPriceLabelsById}
-                  isSelectionLocked={isOrderClosed}
+                  isSelectionLocked={!isOrderOpen}
                 />
               )}
             </div>
@@ -1419,9 +1621,7 @@ const sharerAvatarUpdatedAt =
                   <Users className="w-4 h-4" />
                 </span>
                 <p className="text-lg font-semibold text-[#1F2937] leading-snug">
-                  {showStatusProgress
-                    ? 'Progression de la commande'
-                    : "Progression de la commande"}
+                  Progression de la commande
                 </p>
               </div>
               <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white text-[#B45309] border border-[#FFDCC4] font-semibold text-sm shadow-sm">
@@ -1491,7 +1691,7 @@ const sharerAvatarUpdatedAt =
 
             {!showStatusProgress && (
               <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="bg-[#FFF9F3] border border-[#FFDCC4] rounded-2xl p-3 space-y-1 shadow-sm">
+                <div className="bg-[#FFF9F3] p-2 space-y-1">
                   <p className="text-xs text-[#B45309] font-semibold">Poids restant</p>
                   <p className="text-xl font-semibold text-[#1F2937]">{remainingWeight.toFixed(2)} kg</p>
                 </div>
@@ -1531,9 +1731,6 @@ const sharerAvatarUpdatedAt =
                   <ShieldCheck className="w-4 h-4" />
                   Clôturer
                 </button>
-                <div className="flex items-center gap-2 text-xs font-semibold">
-                    <span className={`px-2.5 py-1 rounded-full border ${statusColor}`}>Statut de la commande : {statusLabel}</span>
-                  </div>
               </div>
             )}
           </div>
@@ -1542,41 +1739,32 @@ const sharerAvatarUpdatedAt =
               <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-4">
             <div className="text-sm text-[#6B7280] space-y-1">
               <p>
-                Total : <span className="text-[#1F2937] font-semibold">{totalCards}</span>
-              </p>
-              <p>
-                Montant à payer : <span className="text-[#1F2937] font-semibold">{formatPrice(totalPrice)}</span>
-              </p>
-              <p className="text-xs text-[#6B7280]">
-                Poids pris en compte : {totalWeightTowardsGoal.toFixed(2)} kg (dont votre sélection : {selectedWeight.toFixed(2)} kg)
+                Montant du panier : <span className="text-[#1F2937] font-semibold">{formatPrice(totalPrice)}</span>
               </p>
             </div>
-            {shouldShowParticipationRequestButton && (
-              <button
-                type="button"
-                onClick={handleRequestParticipation}
-                disabled={isWorking}
-                className="w-full py-2 rounded-xl border border-[#FF6B4A] text-[#FF6B4A] font-semibold hover:bg-[#FFF1E6] transition-colors disabled:opacity-60"
-              >
-                Demander a participer
-              </button>
-            )}
-            {!isOwner && myParticipant?.participationStatus === 'requested' && (
-              <div className="text-xs text-[#6B7280] bg-[#FFF7ED] border border-[#FFDCC4] rounded-xl px-3 py-2">
-                Votre demande est en attente de validation.
-              </div>
-            )}
             <div className="h-px bg-gray-100" />
             <div className="flex flex-wrap items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={handlePurchase}
-                disabled={totalCards === 0 || isWorking || isOrderClosed}
-                className="order-client-view__purchase-button"
-              >
-                <ShoppingCart className="w-4 h-4" />
-                Payer
-              </button>
+              {isOrderOpen ? (
+                remainingToPayCents > 0 ? (
+                  <button
+                    type="button"
+                    onClick={handlePurchase}
+                    disabled={totalCards === 0 || isWorking}
+                    className="order-client-view__purchase-button"
+                  >
+                    <ShoppingCart className="w-4 h-4" />
+                    Payer
+                  </button>
+                ) : (
+                  <div className="text-xs text-[#6B7280] font-semibold">
+                    
+                  </div>
+                )
+              ) : (
+                <div className="text-xs text-[#6B7280] font-semibold">
+                  Paiement indisponible pour le moment
+                </div>
+              )}
             </div>
             </div>
             )}
@@ -1587,7 +1775,7 @@ const sharerAvatarUpdatedAt =
       <div className="order-client-view__participants">
             <div className="order-client-view__participants-header">
               <div>
-                <p className="order-client-view__participants-title">Participants a la commande</p>
+                <p className="order-client-view__participants-title">Participants à la commande</p>
                 <p className="order-client-view__participants-subtitle">{participantsCountLabel}</p>
               </div>
               {isOwner && (
@@ -1677,7 +1865,7 @@ const sharerAvatarUpdatedAt =
                   className="order-client-view__purchase-button"
                   disabled={!participantInvoice.pdfPath || isInvoiceLoading}
                 >
-                  {participantInvoice.pdfPath ? 'Telecharger (PDF)' : 'PDF en cours de generation'}
+                  {participantInvoice.pdfPath ? 'Télecharger (PDF)' : 'PDF en cours de génération'}
                 </button>
               </div>
             )}
@@ -1699,8 +1887,22 @@ const sharerAvatarUpdatedAt =
                   className="order-client-view__purchase-button"
                   disabled={!producerInvoice.pdfPath || isInvoiceLoading}
                 >
-                  {producerInvoice.pdfPath ? 'Telecharger (PDF)' : 'PDF en cours de generation'}
+                  {producerInvoice.pdfPath ? 'Télecharger (PDF)' : 'PDF en cours de generation'}
                 </button>
+              </div>
+            )}
+            {shouldShowSupportCard && (
+              <div className="order-client-view__support-card">
+                <p className="order-client-view__support-title">En cas de problème</p>
+                <p className="order-client-view__support-text">
+                  Envoyez un mail à reclamations@partagetonpanier.fr en précisant :
+                </p>
+                <ul className="order-client-view__support-list">
+                  <li>Le n° commande : {order.orderCode}</li>
+                  {myParticipant?.pickupCode && <li>votre code de retrait : {myParticipant.pickupCode}</li>}
+                  <li>Faites une description précise du problème</li>
+                  <li>Ajoutez une photo si nécessaire</li>
+                </ul>
               </div>
             )}
 
@@ -1708,137 +1910,175 @@ const sharerAvatarUpdatedAt =
               <div className="order-client-view__participants-masked">
                 {!isOwner && !isAuthenticated
                   ? 'Connectez-vous pour voir la liste des participants'
-                  : 'Liste des participants masquee par le createur de la commande'}
+                  : 'Liste des participants masquée par le créateur de la commande'}
               </div>
             ) : participantsWithTotals.length === 0 ? (
               <div className="order-client-view__participants-empty">Aucun participant pour le moment</div>
             ) : (
-              <div className="order-client-view__participants-table-wrapper">
-                <table className="order-client-view__participants-table">
-                  <thead>
-                    <tr>
-                      {viewerVisibility.profile && <th>Participant</th>}
-                      {viewerVisibility.content &&
-                        products.map((product) => (
-                          <th key={product.id} style={{ minWidth: 120 }}>
-                            <span className="order-client-view__participants-table-product">{product.name}</span>
-                            {product.unit && (
-                              <span className="order-client-view__participants-table-unit">{product.unit}</span>
-                            )}
-                          </th>
+              <>
+                <div className="order-client-view__participants-table-wrapper">
+                  <table className="order-client-view__participants-table">
+                    <thead>
+                      <tr>
+                        {viewerVisibility.profile && <th>Participant</th>}
+                        {viewerVisibility.content &&
+                          products.map((product) => (
+                            <th key={product.id} style={{ minWidth: 120 }}>
+                              <span className="order-client-view__participants-table-product">{product.name}</span>
+                              {product.unit && (
+                                <span className="order-client-view__participants-table-unit">{product.unit}</span>
+                              )}
+                            </th>
+                          ))}
+                        {viewerVisibility.weight && (
+                          <th className="order-client-view__participants-table-number">Poids</th>
+                        )}
+                        {viewerVisibility.amount && (
+                          <th className="order-client-view__participants-table-number">Montant</th>
+                        )}
+                        {shouldShowPickupCodeColumn && (
+                          <th className="order-client-view__participants-table-number">Code</th>
+                        )}
+                        {shouldShowInvoiceColumn && (
+                          <th className="order-client-view__participants-table-number">Facture</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {participantsWithTotals.map((participant) => (
+                        <tr key={participant.id}>
+                          {viewerVisibility.profile && (
+                            <td>
+                              <div className="order-client-view__participant-cell">
+                                <button
+                                  type="button"
+                                  className="order-client-view__participant-avatar"
+                                  onClick={() => handleParticipantClick(participant)}
+                                  aria-label={`Voir le profil de ${participant.name}`}
+                                >
+                                <Avatar
+                                  supabaseClient={supabaseClient ?? null}
+                                  path={participant.avatarPath ?? null}
+                                  updatedAt={participant.avatarUpdatedAt ?? null}
+                                  fallbackSrc={DEFAULT_PROFILE_AVATAR}
+                                  alt={participant.name}
+                                  className="w-full h-full object-cover"
+                                />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="order-client-view__participant-name"
+                                  onClick={() => handleParticipantClick(participant)}
+                                >
+                                  {participant.name}
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                          {viewerVisibility.content &&
+                            products.map((product) => {
+                              const qty = participant.quantities[product.id] ?? 0;
+                              return (
+                                <td
+                                  key={product.id}
+                                  className={`order-client-view__participants-table-center ${
+                                    qty === 0 ? 'order-client-view__participants-table-muted' : ''
+                                  }`}
+                                >
+                                  {qty}
+                                </td>
+                              );
+                            })}
+                          {viewerVisibility.weight && (
+                            <td className="order-client-view__participants-table-number">
+                              {participant.totalWeight.toFixed(2)} kg
+                            </td>
+                          )}
+                          {viewerVisibility.amount && (
+                            <td className="order-client-view__participants-table-number">
+                              {formatPrice(participant.totalAmount)}
+                            </td>
+                          )}
+                          {shouldShowPickupCodeColumn && (
+                            <td className="order-client-view__participants-table-number">
+                              {participant.pickupCode ?? 'En attente'}
+                            </td>
+                          )}
+                          {shouldShowInvoiceColumn && (
+                            <td className="order-client-view__participants-table-number">
+                              <button
+                                type="button"
+                                onClick={() => handleParticipantInvoiceDownload(participant)}
+                                className="order-client-view__purchase-button"
+                                disabled={isInvoiceLoading}
+                              >
+                                Télécharger
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                    {shouldShowTotals && (
+                      <tfoot>
+                        <tr className="order-client-view__participants-total-row">
+                          {viewerVisibility.profile && (
+                            <td className="order-client-view__participants-total-label">Total</td>
+                          )}
+                          {viewerVisibility.content &&
+                            products.map((product, index) => {
+                              const totals = productTotals[index];
+                              const content =
+                                totals.measurement === 'kg'
+                                  ? `${totals.totalWeight.toFixed(2)} kg`
+                                  : formatUnitsTotal(totals.totalUnits);
+                              return (
+                                <td key={product.id} className="order-client-view__participants-table-center">
+                                  {content}
+                                </td>
+                              );
+                            })}
+                          {viewerVisibility.weight && (
+                            <td className="order-client-view__participants-table-number">
+                              {totalWeightAll.toFixed(2)} kg
+                            </td>
+                          )}
+                          {viewerVisibility.amount && (
+                            <td className="order-client-view__participants-table-number">
+                              {formatPrice(totalAmountAll)}
+                            </td>
+                          )}
+                          {shouldShowPickupCodeColumn && (
+                            <td className="order-client-view__participants-table-number" />
+                          )}
+                          {shouldShowInvoiceColumn && (
+                            <td className="order-client-view__participants-table-number" />
+                          )}
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+                <div className="order-client-view__participants-count">{participantsCountFooterLabel}</div>
+                {canShowPreview && (
+                  <div className="order-client-view__participants-preview">
+                    <p className="order-client-view__participants-preview-title">
+                      Ce que les autres ont pris (aperçu)
+                    </p>
+                    {previewItems.length > 0 ? (
+                      <ul className="order-client-view__participants-preview-list">
+                        {previewItems.map((item) => (
+                          <li key={item.id} className="order-client-view__participants-preview-item">
+                            {item.label}
+                          </li>
                         ))}
-                      {viewerVisibility.weight && <th className="order-client-view__participants-table-number">Poids</th>}
-                      {viewerVisibility.amount && (
-                        <th className="order-client-view__participants-table-number">Montant</th>
-                      )}
-                      {shouldShowPickupCodeColumn && (
-                        <th className="order-client-view__participants-table-number">Code</th>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {participantsWithTotals.map((participant) => (
-                      <tr key={participant.id}>
-                        {viewerVisibility.profile && (
-                          <td>
-                            <div className="order-client-view__participant-cell">
-                              <button
-                                type="button"
-                                className="order-client-view__participant-avatar"
-                                onClick={() => handleParticipantClick(participant)}
-                                aria-label={`Voir le profil de ${participant.name}`}
-                              >
-                                {participant.avatarUrl ? (
-                                  <ImageWithFallback
-                                    src={participant.avatarUrl}
-                                    alt={participant.name}
-                                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                                  />
-                                ) : (
-                                  <span className="order-client-view__participant-initials">
-                                    {participant.name.slice(0, 1).toUpperCase()}
-                                  </span>
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                className="order-client-view__participant-name"
-                                onClick={() => handleParticipantClick(participant)}
-                              >
-                                {participant.name}
-                              </button>
-                            </div>
-                          </td>
-                        )}
-                        {viewerVisibility.content &&
-                          products.map((product) => {
-                            const qty = participant.quantities[product.id] ?? 0;
-                            return (
-                              <td
-                                key={product.id}
-                                className={`order-client-view__participants-table-center ${
-                                  qty === 0 ? 'order-client-view__participants-table-muted' : ''
-                                }`}
-                              >
-                                {qty}
-                              </td>
-                            );
-                          })}
-                        {viewerVisibility.weight && (
-                          <td className="order-client-view__participants-table-number">
-                            {participant.totalWeight.toFixed(2)} kg
-                          </td>
-                        )}
-                        {viewerVisibility.amount && (
-                          <td className="order-client-view__participants-table-number">
-                            {formatPrice(participant.totalAmount)}
-                          </td>
-                        )}
-                        {shouldShowPickupCodeColumn && (
-                          <td className="order-client-view__participants-table-number">
-                            {participant.pickupCode ?? 'En attente'}
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                  {shouldShowTotals && (
-                    <tfoot>
-                      <tr className="order-client-view__participants-total-row">
-                        {viewerVisibility.profile && (
-                          <td className="order-client-view__participants-total-label">Total</td>
-                        )}
-                        {viewerVisibility.content &&
-                          products.map((product, index) => {
-                            const totals = productTotals[index];
-                            const content =
-                              totals.measurement === 'kg'
-                                ? `${totals.totalWeight.toFixed(2)} kg`
-                                : formatUnitsTotal(totals.totalUnits);
-                            return (
-                              <td key={product.id} className="order-client-view__participants-table-center">
-                                {content}
-                              </td>
-                            );
-                          })}
-                        {viewerVisibility.weight && (
-                          <td className="order-client-view__participants-table-number">
-                            {totalWeightAll.toFixed(2)} kg
-                          </td>
-                        )}
-                        {viewerVisibility.amount && (
-                          <td className="order-client-view__participants-table-number">
-                            {formatPrice(totalAmountAll)}
-                          </td>
-                        )}
-                        {shouldShowPickupCodeColumn && (
-                          <td className="order-client-view__participants-table-number" />
-                        )}
-                      </tr>
-                    </tfoot>
-                  )}
-                </table>
-              </div>
+                      </ul>
+                    ) : (
+                      <p className="order-client-view__participants-preview-fallback">{previewFallbackLabel}</p>
+                    )}
+                  </div>
+                )}
+              </>
             )}
             {isOwner && pendingParticipants.length > 0 && (
               <div className="mt-4 rounded-2xl border border-[#FFDCC4] bg-[#FFF7ED] p-4 text-sm space-y-3">
