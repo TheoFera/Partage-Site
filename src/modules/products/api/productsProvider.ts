@@ -130,8 +130,13 @@ const mapLotStatus = (status: DbLot['status']): ProductionLot['statut'] => {
 const mapLotsToProductions = (lots: DbLot[], measurement: Product['measurement']): ProductionLot[] =>
   lots.map((lot) => {
     const quantity = measurement === 'kg' ? toNumber(lot.stock_kg) : toNumber(lot.stock_units);
-    const startDate = lot.produced_at ?? lot.created_at.slice(0, 10);
-    const endDate = lot.ddm ?? lot.dlc ?? startDate;
+    const metadata = lot.metadata as Record<string, unknown> | null;
+    const salePeriodStart =
+      metadata && typeof metadata.sale_period_start === 'string' ? metadata.sale_period_start : null;
+    const salePeriodEnd =
+      metadata && typeof metadata.sale_period_end === 'string' ? metadata.sale_period_end : null;
+    const startDate = salePeriodStart ?? lot.produced_at ?? lot.created_at.slice(0, 10);
+    const endDate = salePeriodEnd ?? salePeriodStart ?? '';
     return {
       id: lot.lot_code,
       lotDbId: lot.id,

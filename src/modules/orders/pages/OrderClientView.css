@@ -20,14 +20,70 @@
 .order-client-view__status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
+  gap: 8px;
+  padding: 8px 12px;
   border-radius: 9999px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  border: 1px solid transparent;
-  box-shadow: 0 4px 10px -6px rgba(15, 23, 42, 0.25);
+  font-size: inherit;
+  font-weight: inherit;
+  border-width: 1px;
+  border-style: solid;
+  background-color: #ffffff;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   white-space: nowrap;
+}
+
+.order-client-view__status-pill--success {
+  color: #166534;
+  border-color: #bbf7d0;
+}
+
+.order-client-view__status-pill--danger {
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+.order-client-view__status-pill--warning {
+  color: #92400e;
+  border-color: #fde68a;
+}
+
+.order-client-view__status-pill--muted {
+  color: #4b5563;
+  border-color: #e5e7eb;
+}
+
+.order-client-view__status-pill--info {
+  color: #075985;
+  border-color: #bae6fd;
+}
+
+.order-client-view__owner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+  .order-client-view__owner-actions {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    overflow-x: visible;
+    padding-bottom: 0;
+  }
+
+  .order-client-view__visibility-button {
+    width: 100%;
+  }
 }
 
 .order-client-view__visibility-button {
@@ -42,12 +98,12 @@
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
   cursor: pointer;
-  flex-shrink: 1;
+  flex-shrink: 0;
   min-width: 0;
-  max-width: 260px;
+  max-width: none;
   justify-content: center;
   text-align: center;
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .order-client-view__visibility-button--public {
@@ -193,6 +249,207 @@
   align-self: start;
   position: sticky;
   top: 96px;
+}
+
+.order-client-view__calendar-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.order-client-view__calendar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.order-client-view__calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.order-client-view__calendar-nav-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.order-client-view__calendar-nav-button:hover {
+  border-color: #ff6b4a;
+  background-color: #fff7ed;
+}
+
+.order-client-view__calendar-month {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1f2937;
+  text-transform: capitalize;
+}
+
+.order-client-view__calendar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.72rem;
+  color: #6b7280;
+}
+
+.order-client-view__calendar-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.order-client-view__calendar-legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.order-client-view__calendar-legend-swatch--open {
+  background: #dbeafe;
+  border-color: #bfdbfe;
+}
+
+.order-client-view__calendar-legend-swatch--delivery {
+  background: #fee2e2;
+  border-color: #fecaca;
+}
+
+.order-client-view__calendar-legend-swatch--availability {
+  background: #dcfce7;
+  border-color: #bbf7d0;
+}
+
+.order-client-view__calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.order-client-view__calendar-weekday {
+  text-align: center;
+  font-size: 0.7rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.order-client-view__calendar-day {
+  position: relative;
+  width: 100%;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #1f2937;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  appearance: none;
+}
+
+.order-client-view__calendar-day--empty {
+  background: transparent;
+  border-color: transparent;
+}
+
+.order-client-view__calendar-day--open {
+  background: #dbeafe;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.order-client-view__calendar-day--delivery {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.order-client-view__calendar-day--availability {
+  background: #dcfce7;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+
+.order-client-view__calendar-day--today {
+  box-shadow: inset 0 0 0 2px #111827;
+}
+
+.order-client-view__calendar-day--selected {
+  outline: 2px solid #111827;
+  outline-offset: 2px;
+}
+
+.order-client-view__calendar-day--clickable {
+  cursor: pointer;
+}
+
+.order-client-view__calendar-day--inactive {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.order-client-view__calendar-day-dot {
+  position: absolute;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #16a34a;
+}
+
+.order-client-view__calendar-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.order-client-view__calendar-slots-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.order-client-view__calendar-slots-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.order-client-view__calendar-slots-status {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.order-client-view__calendar-slots-note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #6b7280;
+  line-height: 1.4;
 }
 
 .order-client-view__pickup-slots {

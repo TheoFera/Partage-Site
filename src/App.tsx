@@ -2768,42 +2768,70 @@ export default function App() {
     }
 
     let legalEntityRow: LegalEntityRow | null = null;
-      if (nextAccountType !== 'individual' && userData.legalEntity?.legalName && userData.legalEntity.siret) {
-        const legalPayload = {
-          profile_id: user.id,
-          legal_name: userData.legalEntity.legalName,
-          siret: userData.legalEntity.siret,
-          vat_number: userData.legalEntity.vatNumber ?? null,
-          vat_regime: userData.legalEntity.vatRegime ?? 'unknown',
-          entity_type: userData.legalEntity.entityType ?? 'company',
-          producer_category: userData.legalEntity.producerCategory ?? null,
-          iban: userData.legalEntity.iban ?? null,
-          account_holder_name: userData.legalEntity.accountHolderName ?? null,
-          delivery_lead_type: userData.legalEntity.deliveryLeadType ?? null,
-          delivery_lead_days: userData.legalEntity.deliveryLeadDays ?? null,
-          delivery_fixed_day: userData.legalEntity.deliveryFixedDay ?? null,
-          chronofresh_enabled: userData.legalEntity.chronofreshEnabled ?? null,
-          chronofresh_min_weight: userData.legalEntity.chronofreshMinWeight ?? null,
-          chronofresh_max_weight: userData.legalEntity.chronofreshMaxWeight ?? null,
-          producer_delivery_enabled: userData.legalEntity.producerDeliveryEnabled ?? null,
-          producer_delivery_days:
-            userData.legalEntity.producerDeliveryDays && userData.legalEntity.producerDeliveryDays.length > 0
-              ? userData.legalEntity.producerDeliveryDays
-              : null,
-          producer_delivery_min_weight: userData.legalEntity.producerDeliveryMinWeight ?? null,
-          producer_delivery_max_weight: userData.legalEntity.producerDeliveryMaxWeight ?? null,
-          producer_delivery_radius_km: userData.legalEntity.producerDeliveryRadiusKm ?? null,
-          producer_delivery_fee: userData.legalEntity.producerDeliveryFee ?? null,
-          producer_pickup_enabled: userData.legalEntity.producerPickupEnabled ?? null,
-          producer_pickup_days:
-            userData.legalEntity.producerPickupDays && userData.legalEntity.producerPickupDays.length > 0
-              ? userData.legalEntity.producerPickupDays
-              : null,
-          producer_pickup_start_time: userData.legalEntity.producerPickupStartTime ?? null,
-          producer_pickup_end_time: userData.legalEntity.producerPickupEndTime ?? null,
-          producer_pickup_min_weight: userData.legalEntity.producerPickupMinWeight ?? null,
-          producer_pickup_max_weight: userData.legalEntity.producerPickupMaxWeight ?? null,
-        };
+    const legalEntityInput = userData.legalEntity;
+    const hasLegalEntityUpdates =
+      nextAccountType !== 'individual' &&
+      legalEntityInput &&
+      Object.values(legalEntityInput).some((value) => value !== undefined);
+    if (hasLegalEntityUpdates) {
+      const mergedLegalEntity = {
+        ...(user.legalEntity ?? {}),
+        ...Object.fromEntries(
+          Object.entries(legalEntityInput ?? {}).filter(([, value]) => value !== undefined)
+        ),
+      } as Partial<LegalEntity>;
+      const legalPayload: Record<string, unknown> = { profile_id: user.id };
+      if (mergedLegalEntity.legalName !== undefined) legalPayload.legal_name = mergedLegalEntity.legalName;
+      if (mergedLegalEntity.siret !== undefined) legalPayload.siret = mergedLegalEntity.siret;
+      if (mergedLegalEntity.vatNumber !== undefined) legalPayload.vat_number = mergedLegalEntity.vatNumber ?? null;
+      if (mergedLegalEntity.vatRegime !== undefined) legalPayload.vat_regime = mergedLegalEntity.vatRegime ?? 'unknown';
+      if (mergedLegalEntity.entityType !== undefined) legalPayload.entity_type = mergedLegalEntity.entityType;
+      if (mergedLegalEntity.producerCategory !== undefined) legalPayload.producer_category = mergedLegalEntity.producerCategory ?? null;
+      if (mergedLegalEntity.iban !== undefined) legalPayload.iban = mergedLegalEntity.iban ?? null;
+      if (mergedLegalEntity.accountHolderName !== undefined)
+        legalPayload.account_holder_name = mergedLegalEntity.accountHolderName ?? null;
+      if (mergedLegalEntity.deliveryLeadType !== undefined) legalPayload.delivery_lead_type = mergedLegalEntity.deliveryLeadType ?? null;
+      if (mergedLegalEntity.deliveryLeadDays !== undefined) legalPayload.delivery_lead_days = mergedLegalEntity.deliveryLeadDays ?? null;
+      if (mergedLegalEntity.deliveryFixedDay !== undefined) legalPayload.delivery_fixed_day = mergedLegalEntity.deliveryFixedDay ?? null;
+      if (mergedLegalEntity.chronofreshEnabled !== undefined)
+        legalPayload.chronofresh_enabled = mergedLegalEntity.chronofreshEnabled ?? null;
+      if (mergedLegalEntity.chronofreshMinWeight !== undefined)
+        legalPayload.chronofresh_min_weight = mergedLegalEntity.chronofreshMinWeight ?? null;
+      if (mergedLegalEntity.chronofreshMaxWeight !== undefined)
+        legalPayload.chronofresh_max_weight = mergedLegalEntity.chronofreshMaxWeight ?? null;
+      if (mergedLegalEntity.producerDeliveryEnabled !== undefined)
+        legalPayload.producer_delivery_enabled = mergedLegalEntity.producerDeliveryEnabled ?? null;
+      if (mergedLegalEntity.producerDeliveryDays !== undefined) {
+        legalPayload.producer_delivery_days =
+          mergedLegalEntity.producerDeliveryDays && mergedLegalEntity.producerDeliveryDays.length > 0
+            ? mergedLegalEntity.producerDeliveryDays
+            : null;
+      }
+      if (mergedLegalEntity.producerDeliveryMinWeight !== undefined)
+        legalPayload.producer_delivery_min_weight = mergedLegalEntity.producerDeliveryMinWeight ?? null;
+      if (mergedLegalEntity.producerDeliveryMaxWeight !== undefined)
+        legalPayload.producer_delivery_max_weight = mergedLegalEntity.producerDeliveryMaxWeight ?? null;
+      if (mergedLegalEntity.producerDeliveryRadiusKm !== undefined)
+        legalPayload.producer_delivery_radius_km = mergedLegalEntity.producerDeliveryRadiusKm ?? null;
+      if (mergedLegalEntity.producerDeliveryFee !== undefined)
+        legalPayload.producer_delivery_fee = mergedLegalEntity.producerDeliveryFee ?? null;
+      if (mergedLegalEntity.producerPickupEnabled !== undefined)
+        legalPayload.producer_pickup_enabled = mergedLegalEntity.producerPickupEnabled ?? null;
+      if (mergedLegalEntity.producerPickupDays !== undefined) {
+        legalPayload.producer_pickup_days =
+          mergedLegalEntity.producerPickupDays && mergedLegalEntity.producerPickupDays.length > 0
+            ? mergedLegalEntity.producerPickupDays
+            : null;
+      }
+      if (mergedLegalEntity.producerPickupStartTime !== undefined)
+        legalPayload.producer_pickup_start_time = mergedLegalEntity.producerPickupStartTime ?? null;
+      if (mergedLegalEntity.producerPickupEndTime !== undefined)
+        legalPayload.producer_pickup_end_time = mergedLegalEntity.producerPickupEndTime ?? null;
+      if (mergedLegalEntity.producerPickupMinWeight !== undefined)
+        legalPayload.producer_pickup_min_weight = mergedLegalEntity.producerPickupMinWeight ?? null;
+      if (mergedLegalEntity.producerPickupMaxWeight !== undefined)
+        legalPayload.producer_pickup_max_weight = mergedLegalEntity.producerPickupMaxWeight ?? null;
+
       const { data: legalData, error: legalError } = await supabaseClient
         .from('legal_entities')
         .upsert(legalPayload, { onConflict: 'profile_id' })

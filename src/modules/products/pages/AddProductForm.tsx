@@ -16,7 +16,7 @@ export function AddProductForm({ onAddProduct, supabaseClient, currentUser }: Ad
     const city = currentUser?.city?.trim() || currentUser?.address?.trim() || 'A proximite';
     const photo = currentUser?.profileImage?.trim() || undefined;
     return {
-      id: currentUser?.id ?? currentUser?.producerId ?? 'current-user',
+      id: currentUser?.producerId ?? currentUser?.id ?? 'current-user',
       name,
       city,
       photo,

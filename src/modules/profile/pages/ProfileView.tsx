@@ -38,6 +38,7 @@ import {
 } from '../../../shared/constants/producerLabels';
 
 type TabKey = 'products' | 'orders' | 'selection';
+type EditTabKey = 'general' | 'public' | 'structure' | 'sharer' | 'producer_settings';
 
 const deliveryDayOptions: Array<{ id: DeliveryDay; label: string }> = [
   { id: 'monday', label: 'Lundi' },
@@ -757,7 +758,6 @@ function ProfileEditPanel({
   const [name, setName] = React.useState(user.name);
   const [address, setAddress] = React.useState(user.address || '');
   const [addressDetails, setAddressDetails] = React.useState(user.addressDetails || '');
-  const [role, setRole] = React.useState<'producer' | 'sharer' | 'participant'>(user.role);
   const [handleValue, setHandleValue] = React.useState(defaultHandle);
   const [profileVisibility, setProfileVisibility] = React.useState<User['profileVisibility']>(
     user.profileVisibility ?? 'public'
@@ -773,6 +773,7 @@ function ProfileEditPanel({
   const [accountType, setAccountType] = React.useState<User['accountType']>(
     user.accountType ?? 'individual'
   );
+  const [editTab, setEditTab] = React.useState<EditTabKey>('general');
   const [phonePublic, setPhonePublic] = React.useState(user.phonePublic ?? '');
   const [contactEmailPublic, setContactEmailPublic] = React.useState(user.contactEmailPublic ?? '');
   const [offersOnSitePickup, setOffersOnSitePickup] = React.useState<boolean>(Boolean(user.offersOnSitePickup));
@@ -968,9 +969,20 @@ function ProfileEditPanel({
     setProducerLabelsDirty(true);
   };
 
+  const hasAddress = Boolean(address.trim() && city.trim() && postcode.trim());
+  const sharerEligible = Boolean(user.verified && hasAddress);
+  const canBeProducer =
+    accountType === 'company' || accountType === 'association' || accountType === 'public_institution';
+  const hasLegalInfo = Boolean(legalName.trim() && siret.trim());
+  const producerEligible = canBeProducer && hasLegalInfo;
+  const computedRole: User['role'] = producerEligible ? 'producer' : sharerEligible ? 'sharer' : 'participant';
+  const structureTabVisible = accountType !== 'individual';
+  const producerSettingsVisible = accountType !== 'individual' && accountType !== 'auto_entrepreneur';
+  const producerSettingsDisabled = !producerEligible;
+
   React.useEffect(() => {
     let isActive = true;
-    if (role !== 'producer' || !supabaseClient) {
+    if (!producerSettingsVisible || !supabaseClient) {
       setProducerLabelsLoading(false);
       setProducerLabelsLoaded(false);
       return () => {
@@ -1027,10 +1039,10 @@ function ProfileEditPanel({
     return () => {
       isActive = false;
     };
-  }, [role, supabaseClient, user.id]);
+  }, [producerSettingsVisible, supabaseClient, user.id]);
 
   const saveProducerLabels = async () => {
-    if (!supabaseClient || role !== 'producer') return true;
+    if (!supabaseClient || !producerSettingsVisible || !producerEligible) return true;
     if (!producerLabelsLoaded && !producerLabelsDirty) return true;
     const cleaned = producerLabels
       .map((entry) => ({
@@ -1149,27 +1161,24 @@ function ProfileEditPanel({
     []
   );
 
-  const canBeProducer =
-    accountType === 'company' || accountType === 'association' || accountType === 'public_institution';
+  const editTabs = React.useMemo(
+    () =>
+      [
+        { id: 'general' as EditTabKey, label: 'Profil général', visible: true },
+        { id: 'public' as EditTabKey, label: 'Contacts publics', visible: true },
+        { id: 'structure' as EditTabKey, label: 'Structure', visible: structureTabVisible },
+        { id: 'sharer' as EditTabKey, label: 'Créateur de commande', visible: true },
+        { id: 'producer_settings' as EditTabKey, label: 'Réglages producteur', visible: producerSettingsVisible },
+      ].filter((tab) => tab.visible),
+    [producerSettingsVisible, structureTabVisible]
+  );
+
+  React.useEffect(() => {
+    if (editTabs.some((tab) => tab.id === editTab)) return;
+    setEditTab('general');
+  }, [editTab, editTabs]);
 
   const handleSave = async () => {
-    const hasAddress = Boolean(address.trim() && city.trim() && postcode.trim());
-    const hasIdentity = Boolean(user.verified);
-    const hasLegalInfo = accountType !== 'individual' && Boolean(legalName.trim() && siret.trim());
-    if (role === 'producer' && !canBeProducer) {
-      toast.error('Les auto-entreprises ne peuvent pas devenir producteur.');
-      return;
-    }
-
-    if (role === 'sharer' && (!hasIdentity || !hasAddress)) {
-      toast.error('Pour devenir partageur, vérifiez votre identité et complétez votre adresse.');
-      return;
-    }
-    if (role === 'producer' && !hasLegalInfo) {
-      toast.error("Pour devenir producteur, complétez les informations d'entreprise (raison sociale et SIRET).");
-      return;
-    }
-
     const socialLinks: Record<string, string | null> = {
       instagram: socialInstagram.trim() || null,
       facebook: socialFacebook.trim() || null,
@@ -1204,44 +1213,60 @@ function ProfileEditPanel({
         ? { deliveryLeadType: 'fixed_day' as DeliveryLeadType, deliveryFixedDay }
         : { deliveryLeadType: 'days' as DeliveryLeadType, deliveryLeadDays };
 
+    const shouldPersistProducerSettings = producerSettingsVisible && producerEligible;
     const entityType: LegalEntity['entityType'] =
       accountType === 'association'
         ? 'association'
         : accountType === 'public_institution'
         ? 'public_institution'
         : 'company';
-
-    const legalEntity =
-      accountType !== 'individual' && legalName.trim() && siret.trim()
-        ? {
-            legalName: legalName.trim(),
-            siret: siret.trim(),
-            vatNumber: vatNumber.trim() || undefined,
-            vatRegime: vatRegime ?? 'unknown',
-            entityType,
-            producerCategory: producerCategory.trim() || undefined,
-            iban: iban.trim() || undefined,
-            accountHolderName: accountHolderName.trim() || undefined,
-            ...deliveryLeadPayload,
-            chronofreshEnabled,
-            chronofreshMinWeight: chronofreshEnabled ? normalizeWeight(chronofreshMinWeight) : undefined,
-            chronofreshMaxWeight: chronofreshEnabled ? normalizeWeight(chronofreshMaxWeight) : undefined,
-            producerDeliveryEnabled,
-            producerDeliveryDays: producerDeliveryEnabled ? producerDeliveryDays : undefined,
-            producerDeliveryMinWeight: producerDeliveryEnabled ? normalizeWeight(producerDeliveryMinWeight) : undefined,
-            producerDeliveryMaxWeight: producerDeliveryEnabled ? normalizeWeight(producerDeliveryMaxWeight) : undefined,
-            producerDeliveryRadiusKm: normalizeDistance(producerDeliveryRadiusKm),
-            producerDeliveryFee: normalizeFee(producerDeliveryFee),
-            producerPickupEnabled,
-            producerPickupDays: producerPickupEnabled ? producerPickupDays : undefined,
-            producerPickupStartTime: producerPickupEnabled ? producerPickupStartTime.trim() : undefined,
-            producerPickupEndTime: producerPickupEnabled ? producerPickupEndTime.trim() : undefined,
-            producerPickupMinWeight: producerPickupEnabled ? normalizeWeight(producerPickupMinWeight) : undefined,
-            producerPickupMaxWeight: producerPickupEnabled ? normalizeWeight(producerPickupMaxWeight) : undefined,
-          }
+    const hasLegalDraft =
+      accountType !== 'individual' &&
+      Boolean(
+        legalName.trim() ||
+          siret.trim() ||
+          vatNumber.trim() ||
+          iban.trim() ||
+          accountHolderName.trim() ||
+          vatRegime !== 'unknown'
+      );
+    const baseLegalEntity: Partial<LegalEntity> = {
+      legalName: legalName.trim() || undefined,
+      siret: siret.trim() || undefined,
+      vatNumber: vatNumber.trim() || undefined,
+      vatRegime: vatRegime ?? 'unknown',
+      entityType,
+      iban: iban.trim() || undefined,
+      accountHolderName: accountHolderName.trim() || undefined,
+    };
+    const producerSettingsPayload = shouldPersistProducerSettings
+      ? {
+          producerCategory: producerCategory.trim() || undefined,
+          ...deliveryLeadPayload,
+          chronofreshEnabled,
+          chronofreshMinWeight: chronofreshEnabled ? normalizeWeight(chronofreshMinWeight) : undefined,
+          chronofreshMaxWeight: chronofreshEnabled ? normalizeWeight(chronofreshMaxWeight) : undefined,
+          producerDeliveryEnabled,
+          producerDeliveryDays: producerDeliveryEnabled ? producerDeliveryDays : undefined,
+          producerDeliveryMinWeight: producerDeliveryEnabled ? normalizeWeight(producerDeliveryMinWeight) : undefined,
+          producerDeliveryMaxWeight: producerDeliveryEnabled ? normalizeWeight(producerDeliveryMaxWeight) : undefined,
+          producerDeliveryRadiusKm: normalizeDistance(producerDeliveryRadiusKm),
+          producerDeliveryFee: normalizeFee(producerDeliveryFee),
+          producerPickupEnabled,
+          producerPickupDays: producerPickupEnabled ? producerPickupDays : undefined,
+          producerPickupStartTime: producerPickupEnabled ? producerPickupStartTime.trim() : undefined,
+          producerPickupEndTime: producerPickupEnabled ? producerPickupEndTime.trim() : undefined,
+          producerPickupMinWeight: producerPickupEnabled ? normalizeWeight(producerPickupMinWeight) : undefined,
+          producerPickupMaxWeight: producerPickupEnabled ? normalizeWeight(producerPickupMaxWeight) : undefined,
+        }
+      : {};
+    const legalEntityDraft =
+      accountType !== 'individual' && (hasLegalDraft || shouldPersistProducerSettings)
+        ? { ...baseLegalEntity, ...producerSettingsPayload }
         : undefined;
+    const legalEntity = legalEntityDraft ? (legalEntityDraft as LegalEntity) : undefined;
 
-    const labelsSaved = await saveProducerLabels();
+    const labelsSaved = producerSettingsVisible ? await saveProducerLabels() : true;
     if (!labelsSaved) return;
     onUpdateUser({
       name: name.trim() || user.name,
@@ -1251,7 +1276,7 @@ function ProfileEditPanel({
       postcode: postcode.trim(),
       phone: phone.trim(),
       accountType,
-      role,
+      role: computedRole,
       handle: handleValue.trim() || defaultHandle,
       profileVisibility,
       addressVisibility,
@@ -1260,7 +1285,7 @@ function ProfileEditPanel({
       phonePublic: phonePublic.trim() || undefined,
       contactEmailPublic: contactEmailPublic.trim() || undefined,
       offersOnSitePickup,
-      freshProductsCertified,
+      ...(shouldPersistProducerSettings ? { freshProductsCertified } : {}),
       socialLinks: Object.keys(filteredSocials).length ? filteredSocials : undefined,
       openingHours: Object.keys(opening).length ? opening : undefined,
       legalEntity,
@@ -1283,404 +1308,256 @@ function ProfileEditPanel({
     };
   }, [onRegisterSave]);
 
-  return (
-    <div className="space-y-6 pb-12">
-      <div className="profile-edit-header flex items-center justify-between">
-        <div>
-          <h2 className="text-[#1F2937] text-xl font-semibold">Modifier le profil</h2>
-          <p className="text-sm text-[#6B7280]">Retrouvez les réglages de l ancien profil.</p>
-        </div>
-        <button
-          onClick={onClose}
-          className="px-3 py-1 rounded-lg border border-gray-200 text-[#1F2937] hover:border-[#FF6B4A]"
+  const renderEligibilityItem = (label: string, isValid: boolean) => {
+    const Icon = isValid ? Check : Lock;
+    return (
+      <div className="flex items-center gap-2 text-sm">
+        <span
+          className={`inline-flex h-6 w-6 items-center justify-center rounded-full ${
+            isValid ? 'bg-[#E6F6F0] text-[#0F5132]' : 'bg-gray-100 text-[#9CA3AF]'
+          }`}
         >
-          Retour sans enregistrer
-        </button>
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className={isValid ? 'text-[#1F2937]' : 'text-[#6B7280]'}>{label}</span>
       </div>
+    );
+  };
 
-
-      <div className="bg-white rounded-xl p-6 shadow-sm space-y-6">
-        <div className="profile-edit-hero flex items-start justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="profile-avatar rounded-full overflow-hidden ring-2 ring-[#FFE8D7] bg-gradient-to-br from-[#FF6B4A] to-[#FFD166] flex items-center justify-center text-xl text-white">
-              <Avatar
-                supabaseClient={supabaseClient ?? null}
-                path={user.avatarPath}
-                updatedAt={avatarVersion}
-                fallbackSrc={avatarFallbackSrc}
-                alt={name || user.name}
-                className="w-full h-full object-cover"
-              />
+  const renderEditTabContent = () => {
+    if (editTab === 'general') {
+      return (
+        <>
+          <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Identité et visibilité</h3>
+              <p className="text-xs text-[#6B7280]">Nom, identifiant, bio, image et visibilité du profil.</p>
             </div>
-            <div className="space-y-2">
-              <div className="text-xl font-semibold text-[#1F2937]">{name || user.name}</div>
-              <div className="flex items-center gap-2">
-                <span className="px-3 py-1 bg-[#FF6B4A]/10 text-[#FF6B4A] text-xs rounded-full">
-                  {role === 'producer' ? 'Producteur' : role === 'sharer' ? 'Partageur' : 'Participant'}
-                </span>
-                {user.verified && (
-                  <span className="px-3 py-1 bg-[#28C1A5]/10 text-[#28C1A5] text-xs rounded-full flex items-center gap-1">
-                    <Shield className="w-3 h-3" />
-                    Vérifié
-                  </span>
-                )}
-              </div>
-              <p className="text-sm text-[#6B7280]">Edition du profil</p>
-            </div>
-          </div>
-          <button
-            onClick={handleSave}
-            className="px-4 py-2 rounded-lg bg-[#FF6B4A] text-white hover:bg-[#FF5A39] transition-colors"
-          >
-            Enregistrer
-          </button>
-        </div>
-
-        <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="text-[#1F2937] font-semibold">Identité et visibilité</h3>
-            <p className="text-xs text-[#6B7280]">Nom, identifiant, bio, image et visibilité du profil.</p>
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm text-[#6B7280]">Nom complet</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                  placeholder="Nom complet"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm text-[#6B7280]">Identifiant profil</label>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-[#9CA3AF]">@</span>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Nom complet</label>
                   <input
                     type="text"
-                    value={handleValue}
-                    onChange={(e) => setHandleValue(e.target.value.replace(/\s+/g, ''))}
-                    className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] text-sm"
-                    placeholder="votrepseudo"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    placeholder="Nom complet"
                   />
                 </div>
-                <p className="text-xs text-[#9CA3AF]">Utile pour le lien du profil.</p>
-              </div>
-              <div>
-                <label className="block text-sm text-[#6B7280]">Bio / phrase</label>
-                <textarea
-                  value={tagline}
-                  onChange={(e) => setTagline(e.target.value)}
-                  placeholder="Quelques mots sur vous..."
-                  rows={3}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Visibilité du profil</label>
-                <div className="profile-visibility-group flex items-center gap-2">
-                  <VisibilityButton
-                    label="Public"
-                    icon={Globe}
-                    active={profileVisibility === 'public'}
-                    onClick={() => setProfileVisibility('public')}
-                  />
-                  <VisibilityButton
-                    label="Privé"
-                    icon={Lock}
-                    active={profileVisibility === 'private'}
-                    onClick={() => setProfileVisibility('private')}
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm text-[#6B7280]">Identifiant profil</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-[#9CA3AF]">@</span>
+                    <input
+                      type="text"
+                      value={handleValue}
+                      onChange={(e) => setHandleValue(e.target.value.replace(/\s+/g, ''))}
+                      className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] text-sm"
+                      placeholder="votrepseudo"
+                    />
+                  </div>
+                  <p className="text-xs text-[#9CA3AF]">Utile pour le lien du profil.</p>
+                </div>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Bio / phrase</label>
+                  <textarea
+                    value={tagline}
+                    onChange={(e) => setTagline(e.target.value)}
+                    placeholder="Quelques mots sur vous..."
+                    rows={3}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
                   />
                 </div>
-                <p className="text-xs text-[#9CA3AF]">Le mode privé limite la visibilité de votre profil et de vos informations.</p>
-                {!user.verified && (
-                  <button className="w-full py-2 bg-[#28C1A5] text-white rounded-lg hover:bg-[#23A88F] transition-colors">
-                    Verifier mon identité
-                  </button>
-                )}
+                <div className="space-y-2">
+                  <label className="block text-sm text-[#6B7280]">Visibilité du profil</label>
+                  <div className="profile-visibility-group flex items-center gap-2">
+                    <VisibilityButton
+                      label="Public"
+                      icon={Globe}
+                      active={profileVisibility === 'public'}
+                      onClick={() => setProfileVisibility('public')}
+                    />
+                    <VisibilityButton
+                      label="Privé"
+                      icon={Lock}
+                      active={profileVisibility === 'private'}
+                      onClick={() => setProfileVisibility('private')}
+                    />
+                  </div>
+                  <p className="text-xs text-[#9CA3AF]">Le mode privé limite la visibilité de votre profil et de vos informations.</p>
+                  {!user.verified && (
+                    <button className="w-full py-2 bg-[#28C1A5] text-white rounded-lg hover:bg-[#23A88F] transition-colors">
+                      Verifier mon identité
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-3 rounded-xl bg-[#F9FAFB] p-4 border border-gray-200">
+                <div className="space-y-2">
+                  <label className="block text-sm text-[#6B7280]">Photo de profil</label>
+                  <AvatarUploader
+                    supabaseClient={supabaseClient ?? null}
+                    userId={user.id}
+                    currentPath={user.avatarPath}
+                    onUploadComplete={onAvatarUpdated}
+                    fallbackSrc={avatarFallbackSrc}
+                    avatarUpdatedAt={avatarVersion}
+                  />
+                </div>
               </div>
             </div>
-            <div className="space-y-3 rounded-xl bg-[#F9FAFB] p-4 border border-gray-200">
-              <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Photo de profil</label>
-                <AvatarUploader
-                  supabaseClient={supabaseClient ?? null}
-                  userId={user.id}
-                  currentPath={user.avatarPath}
-                  onUploadComplete={onAvatarUpdated}
-                  fallbackSrc={avatarFallbackSrc}
-                  avatarUpdatedAt={avatarVersion}
-                />
-              </div>
-            </div>
-          </div>
-        </section>
+          </section>
 
 
-        <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="text-[#1F2937] font-semibold">Coordonnées obligatoires</h3>
-            <p className="text-xs text-[#6B7280]">Pour sécuriser le fonctionnement de la plateforme.</p>
-          </div>
-          <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-            <p className="text-sm font-semibold text-[#1F2937]">Confirmez vos coordonnées</p>
-            <div className="space-y-3">
-              <label className="block text-sm text-[#6B7280]">Adresse *</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder="12 Rue Caldagues"
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                />
-                {address.trim() ? (
-                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-[#E6F6F0] border border-[#C8EBDD] text-[#0F5132]">
-                    <Check className="w-4 h-4" />
-                  </span>
-                ) : null}
-              </div>
-              <div>
-                <label className="block text-sm text-[#6B7280]">Informations complementaires à l'adresse</label>
-                <input
-                  type="text"
-                  value={addressDetails}
-                  onChange={(e) => setAddressDetails(e.target.value)}
-                  placeholder="Lieu précis, bâtiment, étage, code d'entrée"
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                />
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-sm text-[#6B7280]">Code postal *</label>
-                  <input
-                    type="text"
-                    value={postcode}
-                    onChange={(e) => setPostcode(e.target.value)}
-                    placeholder="75001"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-[#6B7280]">Ville *</label>
-                  <input
-                    type="text"
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
-                    placeholder="Paris"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-[#6B7280]">Pays *</label>
-                  <select
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] bg-white"
-                    defaultValue="France"
-                    disabled
-                  >
-                    <option>France</option>
-                  </select>
-                </div>
-              </div>
-              <div className="profile-visibility-group flex items-center gap-2">
-                <VisibilityButton
-                  label="Adresse visible"
-                  icon={MapPin}
-                  active={addressVisibility === 'public'}
-                  onClick={() => setAddressVisibility('public')}
-                />
-                <VisibilityButton
-                  label="Adresse masquée"
-                  icon={Lock}
-                  active={addressVisibility === 'private'}
-                  onClick={() => setAddressVisibility('private')}
-                />
-              </div>
+
+          <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Type de compte</h3>
+              <p className="text-xs text-[#6B7280]">Le rôle est calculé automatiquement selon vos informations.</p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Téléphone *</label>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                  placeholder="06 00 00 00 00"
-                />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="text-[#1F2937] font-semibold">Type de compte</h3>
-            <p className="text-xs text-[#6B7280]">Si vous souhaitez devenir partageur ou utiliser la plateforme de manière professionnelle.</p>
-          </div>
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <div className="xl:col-span-2 space-y-3">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <RoleButton label="Participant" active={role === 'participant'} onClick={() => setRole('participant')} />
-                <RoleButton
-                  label="Partageur"
-                  active={role === 'sharer'}
-                  disabled={!(user.verified && address.trim() && city.trim() && postcode.trim())}
-                  onClick={() => {
-                    if (user.verified && address.trim() && city.trim() && postcode.trim()) setRole('sharer');
-                  }}
-                  hint="Vérifiez votre identité et complétez votre adresse pour pouvoir passer partageur."
-                />
-                <RoleButton
-                  label="Producteur"
-                  active={role === 'producer'}
-                  disabled={!canBeProducer || !legalName.trim() || !siret.trim()}
-                  onClick={() => {
-                    if (canBeProducer && legalName.trim() && siret.trim()) setRole('producer');
-                  }}
-                  hint="Auto-entreprise non eligible, raison sociale et SIRET requis."
-                />
-              </div>
-              <p className="text-xs text-[#9CA3AF]">
-                Partageur: identite verifiee + adresse complete. Producteur: entreprise/association/collectivite avec raison sociale et SIRET.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <label className="block text-sm text-[#6B7280]">Type de compte</label>
-              <select
-                value={accountType}
-                onChange={(e) =>
-                  setAccountType(
-                    (e.target.value as
-                      | 'individual'
-                      | 'auto_entrepreneur'
-                      | 'company'
-                      | 'association'
-                      | 'public_institution') ?? 'individual'
-                  )
-                }
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-              >
-                <option value="individual">Particulier</option>
-                <option value="auto_entrepreneur">Auto-entreprise</option>
-                <option value="company">Entreprise</option>
-                <option value="association">Association</option>
-                <option value="public_institution">Autre</option>
-              </select>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <label className="flex items-center gap-2 text-sm text-[#374151]">
-              <input
-                type="checkbox"
-                checked={freshProductsCertified}
-                onChange={(e) => setFreshProductsCertified(e.target.checked)}
-                className="rounded border-gray-300 text-[#FF6B4A] focus:ring-[#FF6B4A]"
-              />
-              Habilitation a partager des produits frais
-            </label>
-          </div>
-        </section>
-
-        {accountType !== 'individual' && (
-          <section className="rounded-2xl border border-[#D7E3FF] bg-[#F6F8FF] p-4 space-y-4 shadow-sm">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="text-[#1F2937] font-semibold">Informations légales</h3>
-              <span className="text-xs text-[#6B7280]">Ces informations doivent être complétées si vous utilisez la plateforme de manière professionnelle</span>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div>
-                <label className="block text-sm text-[#6B7280]">Raison sociale *</label>
-                <input
-                  type="text"
-                  value={legalName}
-                  onChange={(e) => setLegalName(e.target.value)}
-                  placeholder="Votre entreprise"
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-[#6B7280]">SIRET *</label>
-                <input
-                  type="text"
-                  value={siret}
-                  onChange={(e) => setSiret(e.target.value)}
-                  placeholder="123 456 789 00012"
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-[#6B7280]">Regime TVA</label>
+                <label className="block text-sm text-[#6B7280]">Type de compte</label>
                 <select
-                  value={vatRegime ?? 'unknown'}
-                  onChange={(e) => setVatRegime(e.target.value as LegalEntity['vatRegime'])}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  value={accountType}
+                  onChange={(e) =>
+                    setAccountType(
+                      (e.target.value as
+                        | 'individual'
+                        | 'auto_entrepreneur'
+                        | 'company'
+                        | 'association'
+                        | 'public_institution') ?? 'individual'
+                    )
+                  }
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                 >
-                  <option value="unknown">Selectionner un regime</option>
-                  <option value="franchise">Franchise de base (TVA non applicable)</option>
-                  <option value="assujetti">Assujetti a la TVA</option>
+                  <option value="individual">Particulier</option>
+                  <option value="auto_entrepreneur">Auto-entreprise</option>
+                  <option value="company">Entreprise</option>
+                  <option value="association">Association</option>
+                  <option value="public_institution">Autre</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-sm text-[#6B7280]">Numero de TVA</label>
-                <input
-                  type="text"
-                  value={vatNumber}
-                  onChange={(e) => setVatNumber(e.target.value)}
-                  placeholder="FRXX999999999"
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                />
-                {vatRegime === 'assujetti' && !vatNumber.trim() ? (
-                  <p className="mt-2 text-xs text-[#B45309]">
-                    Le numero de TVA est requis pour un regime assujetti.
-                  </p>
-                ) : null}
-              </div>
-              {role === 'producer' && (
-                <div>
-                  <label className="block text-sm text-[#6B7280]">Catégorie de producteur</label>
-                  <select
-                    value={producerCategory}
-                    onChange={(e) => setProducerCategory(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                  >
-                    <option value="">Sélectionner une catégorie</option>
-                    {producerCategoryOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+              <div className="rounded-xl border border-[#FBD0B8] bg-white p-3 text-xs text-[#6B7280] space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[#9CA3AF]">Rôle calculé</span>
+                  <span className="px-2 py-0.5 rounded-full bg-[#FF6B4A]/10 text-[#FF6B4A] font-semibold">
+                    {computedRole === 'producer'
+                      ? 'Producteur'
+                      : computedRole === 'sharer'
+                        ? 'Partageur'
+                        : 'Participant'}
+                  </span>
                 </div>
-              )}
-              
+                <p>
+                  Identité vérifiée + adresse complète =&gt; partageur. Informations légales complètes + type de compte
+                  éligible =&gt; producteur.
+                </p>
+              </div>
             </div>
-            <div className='grid md:grid-cols-1 lg:grid-cols-2 gap-3'>
-                <label className="block text-sm text-[#6B7280]">RIB</label>
-                <div>
-                  <label className="block text-sm text-[#6B7280]">Identité du compte</label>
+          </section>
+
+          <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Coordonnées obligatoires</h3>
+              <p className="text-xs text-[#6B7280]">Pour sécuriser le fonctionnement de la plateforme.</p>
+            </div>
+            <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+              <p className="text-sm font-semibold text-[#1F2937]">Confirmez vos coordonnées</p>
+              <div className="space-y-3">
+                <label className="block text-sm text-[#6B7280]">Adresse *</label>
+                <div className="flex items-center gap-2">
                   <input
                     type="text"
-                    value={accountHolderName}
-                    onChange={(e) => setAccountHolderName(e.target.value)}
-                    placeholder="Nom du titulaire"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder="12 Rue Caldagues"
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                  {address.trim() ? (
+                    <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-[#E6F6F0] border border-[#C8EBDD] text-[#0F5132]">
+                      <Check className="w-4 h-4" />
+                    </span>
+                  ) : null}
+                </div>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Informations complementaires à l'adresse</label>
+                  <input
+                    type="text"
+                    value={addressDetails}
+                    onChange={(e) => setAddressDetails(e.target.value)}
+                    placeholder="Lieu précis, bâtiment, étage, code d'entrée"
                     className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm text-[#6B7280]">IBAN</label>
-                  <input
-                    type="text"
-                    value={iban}
-                    onChange={(e) => setIban(e.target.value)}
-                    placeholder="FR76...."
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-sm text-[#6B7280]">Code postal *</label>
+                    <input
+                      type="text"
+                      value={postcode}
+                      onChange={(e) => setPostcode(e.target.value)}
+                      placeholder="75001"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-[#6B7280]">Ville *</label>
+                    <input
+                      type="text"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      placeholder="Paris"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-[#6B7280]">Pays *</label>
+                    <select
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] bg-white"
+                      defaultValue="France"
+                      disabled
+                    >
+                      <option>France</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="profile-visibility-group flex items-center gap-2">
+                  <VisibilityButton
+                    label="Adresse visible"
+                    icon={MapPin}
+                    active={addressVisibility === 'public'}
+                    onClick={() => setAddressVisibility('public')}
+                  />
+                  <VisibilityButton
+                    label="Adresse masquée"
+                    icon={Lock}
+                    active={addressVisibility === 'private'}
+                    onClick={() => setAddressVisibility('private')}
                   />
                 </div>
               </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="block text-sm text-[#6B7280]">Téléphone *</label>
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    placeholder="06 00 00 00 00"
+                  />
+                </div>
+              </div>
+            </div>
           </section>
-        )}
-
+        </>
+      );
+    }
+    if (editTab === 'public') {
+      return (
         <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-3 rounded-xl bg-[#F9FAFB] p-4 border border-gray-200">
@@ -1706,32 +1583,6 @@ function ProfileEditPanel({
                     className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                   />
                 </div>
-              </div>
-              <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Horaires</label>
-                <div className="space-y-2">
-                  {deliveryDayOptions.map((dayOption) => (
-                    <div key={`opening-${dayOption.id}`} className="flex items-center gap-3">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full border border-gray-200 bg-white text-xs font-semibold text-[#374151]">
-                        {dayOption.label}
-                      </span>
-                      <input
-                        type="time"
-                        value={openingHoursSlots[dayOption.id].start}
-                        onChange={(e) => handleOpeningHoursChange(dayOption.id, 'start', e.target.value)}
-                        className="w-28 px-3 py-2 text-sm text-center border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A]"
-                      />
-                      <span className="text-sm text-[#9CA3AF]">-</span>
-                      <input
-                        type="time"
-                        value={openingHoursSlots[dayOption.id].end}
-                        onChange={(e) => handleOpeningHoursChange(dayOption.id, 'end', e.target.value)}
-                        className="w-28 px-3 py-2 text-sm text-center border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A]"
-                      />
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-[#9CA3AF]">Laissez vide pour indiquer une fermeture.</p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-sm text-[#374151]">
@@ -1784,14 +1635,198 @@ function ProfileEditPanel({
             </div>
           </div>
         </section>
-
-        {role === 'producer' && (
+      );
+    }
+    if (editTab === 'structure') {
+      return (
+        <section className="rounded-2xl border border-[#D7E3FF] bg-[#F6F8FF] p-4 space-y-4 shadow-sm">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="text-[#1F2937] font-semibold">Informations légales</h3>
+            <span className="text-xs text-[#6B7280]">
+              Ces informations peuvent être complétées progressivement.
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-sm text-[#6B7280]">Raison sociale</label>
+              <input
+                type="text"
+                value={legalName}
+                onChange={(e) => setLegalName(e.target.value)}
+                placeholder="Votre entreprise"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-[#6B7280]">SIRET</label>
+              <input
+                type="text"
+                value={siret}
+                onChange={(e) => setSiret(e.target.value)}
+                placeholder="123 456 789 00012"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-[#6B7280]">Regime TVA</label>
+              <select
+                value={vatRegime ?? 'unknown'}
+                onChange={(e) => setVatRegime(e.target.value as LegalEntity['vatRegime'])}
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+              >
+                <option value="unknown">Selectionner un regime</option>
+                <option value="franchise">Franchise de base (TVA non applicable)</option>
+                <option value="assujetti">Assujetti a la TVA</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-[#6B7280]">Numero de TVA</label>
+              <input
+                type="text"
+                value={vatNumber}
+                onChange={(e) => setVatNumber(e.target.value)}
+                placeholder="FRXX999999999"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+              />
+              {vatRegime === 'assujetti' && !vatNumber.trim() ? (
+                <p className="mt-2 text-xs text-[#B45309]">
+                  Le numero de TVA est requis pour un regime assujetti.
+                </p>
+              ) : null}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm text-[#6B7280]">Coordonnées bancaires</label>
+            <div className="grid md:grid-cols-1 lg:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm text-[#6B7280]">Identité du compte</label>
+                <input
+                  type="text"
+                  value={accountHolderName}
+                  onChange={(e) => setAccountHolderName(e.target.value)}
+                  placeholder="Nom du titulaire"
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-[#6B7280]">IBAN</label>
+                <input
+                  type="text"
+                  value={iban}
+                  onChange={(e) => setIban(e.target.value)}
+                  placeholder="FR76...."
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+      );
+    }
+    if (editTab === 'sharer') {
+      return (
+        <>
           <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="text-[#1F2937] font-semibold">Labels d'exploitation</h3>
-              <span className="text-xs text-[#6B7280]">
-                Affiches dans l'onglet Qualite de tous vos produits.
-              </span>
+              <h3 className="text-[#1F2937] font-semibold">Horaire par défaut pour la récupération des produits</h3>
+              <span className="text-xs text-[#6B7280]">Définissez les horaires proposés aux participants.</span>
+            </div>
+            <div className="space-y-2">
+              {deliveryDayOptions.map((dayOption) => (
+                <div key={`opening-${dayOption.id}`} className="flex items-center gap-3">
+                  <span className="inline-flex items-center px-3 py-1 rounded-full border border-gray-200 bg-white text-xs font-semibold text-[#374151]">
+                    {dayOption.label}
+                  </span>
+                  <input
+                    type="time"
+                    value={openingHoursSlots[dayOption.id].start}
+                    onChange={(e) => handleOpeningHoursChange(dayOption.id, 'start', e.target.value)}
+                    className="w-28 px-3 py-2 text-sm text-center border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                  <span className="text-sm text-[#9CA3AF]">-</span>
+                  <input
+                    type="time"
+                    value={openingHoursSlots[dayOption.id].end}
+                    onChange={(e) => handleOpeningHoursChange(dayOption.id, 'end', e.target.value)}
+                    className="w-28 px-3 py-2 text-sm text-center border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+              ))}
+              <p className="text-xs text-[#9CA3AF]">Laissez vide pour indiquer une fermeture.</p>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Eligibilité créateur de commande</h3>
+              <span className="text-xs text-[#6B7280]">Lecture seule.</span>
+            </div>
+            <div className="space-y-2">
+              {renderEligibilityItem('Identité vérifiée', Boolean(user.verified))}
+              {renderEligibilityItem('Adresse complète (adresse + code postal + ville)', hasAddress)}
+            </div>
+          </section>
+        </>
+      );
+    }
+    if (editTab === 'producer_settings') {
+      return (
+        <>
+          <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Eligibilité producteur</h3>
+              <span className="text-xs text-[#6B7280]">Lecture seule.</span>
+            </div>
+            <div className="space-y-2">
+              {renderEligibilityItem('Type de compte éligible (entreprise / association / collectivité)', canBeProducer)}
+              {renderEligibilityItem('Raison sociale + SIRET complets', hasLegalInfo)}
+            </div>
+            {producerSettingsDisabled && (
+              <p className="text-xs text-[#B45309]">
+                Complétez la structure pour activer les réglages producteur.
+              </p>
+            )}
+          </section>
+
+          <section
+            className={`rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm ${
+              producerSettingsDisabled ? 'opacity-60' : ''
+            }`}
+            aria-disabled={producerSettingsDisabled}
+          >
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Certifications et labels</h3>
+              <span className="text-xs text-[#6B7280]">Informations visibles sur votre profil producteur.</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm text-[#6B7280]">Catégorie de producteur</label>
+                <select
+                  value={producerCategory}
+                  onChange={(e) => setProducerCategory(e.target.value)}
+                  disabled={producerSettingsDisabled}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                >
+                  <option value="">Sélectionner une catégorie</option>
+                  {producerCategoryOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-[#374151]">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={freshProductsCertified}
+                    onChange={(e) => setFreshProductsCertified(e.target.checked)}
+                    disabled={producerSettingsDisabled}
+                    className="rounded border-gray-300 text-[#FF6B4A] focus:ring-[#FF6B4A]"
+                  />
+                  Habilitation a partager des produits frais
+                </label>
+              </div>
             </div>
             {producerLabelsLoading ? (
               <p className="text-xs text-[#6B7280]">Chargement des labels...</p>
@@ -1812,7 +1847,10 @@ function ProfileEditPanel({
                       <button
                         type="button"
                         onClick={() => handleRemoveProducerLabel(entry.label)}
-                        className="ml-auto rounded-full border border-[#FBD0B8] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#B45309] hover:text-[#FF6B4A]"
+                        disabled={producerSettingsDisabled}
+                        className={`ml-auto rounded-full border border-[#FBD0B8] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#B45309] hover:text-[#FF6B4A] ${
+                          producerSettingsDisabled ? 'opacity-60 cursor-not-allowed' : ''
+                        }`}
                         aria-label={`Retirer le label ${entry.label}`}
                       >
                         Retirer
@@ -1834,6 +1872,7 @@ function ProfileEditPanel({
                 onChange={(e) => setProducerLabelInput(e.target.value)}
                 onKeyDown={handleProducerLabelKeyDown}
                 placeholder="Nom du label"
+                disabled={producerSettingsDisabled}
                 className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
               />
               <input
@@ -1842,6 +1881,7 @@ function ProfileEditPanel({
                 onChange={(e) => setProducerLabelDescription(e.target.value)}
                 onKeyDown={handleProducerLabelKeyDown}
                 placeholder="Description (optionnel)"
+                disabled={producerSettingsDisabled}
                 className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
               />
               <input
@@ -1853,6 +1893,7 @@ function ProfileEditPanel({
                 min="1900"
                 max="2100"
                 step="1"
+                disabled={producerSettingsDisabled}
                 className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
               />
             </div>
@@ -1860,9 +1901,9 @@ function ProfileEditPanel({
               <button
                 type="button"
                 onClick={handleAddProducerLabel}
-                disabled={!producerLabelInput.trim()}
+                disabled={producerSettingsDisabled || !producerLabelInput.trim()}
                 className={`px-4 py-2 rounded-lg border border-[#FF6B4A] text-[#FF6B4A] font-semibold hover:bg-[#FFF1E6] ${
-                  producerLabelInput.trim() ? '' : 'opacity-60 cursor-not-allowed'
+                  producerSettingsDisabled || !producerLabelInput.trim() ? 'opacity-60 cursor-not-allowed' : ''
                 }`}
               >
                 Ajouter
@@ -1874,10 +1915,13 @@ function ProfileEditPanel({
               </p>
             )}
           </section>
-        )}
 
-        {role === 'producer' && (
-          <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
+          <section
+            className={`rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm ${
+              producerSettingsDisabled ? 'opacity-60' : ''
+            }`}
+            aria-disabled={producerSettingsDisabled}
+          >
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-[#1F2937] font-semibold">Réglages producteur - Livraison des produits</h3>
               <span className="text-xs text-[#6B7280]">
@@ -1891,12 +1935,13 @@ function ProfileEditPanel({
                     type="checkbox"
                     checked={chronofreshEnabled}
                     onChange={(e) => setChronofreshEnabled(e.target.checked)}
+                    disabled={producerSettingsDisabled}
                   />
                   Expédition Chronofresh
                 </label>
                 <p className="text-xs text-[#6B7280]">Option gérée par le site : les frais de livraison sont répartis entre les participants à la commande.</p>
                 <div className="space-y-2">
-                  <label className="block text-xs text-[#6B7280]">indiquez dans quel délai vous vous engagez à avoir livré la commande apres clôture de celle-ci (Chronofresh prend en moyenne 24h pour livrer à partir du moment où il a récupéré la commande)</label>
+                  <label className="block text-xs text-[#6B7280]">indiquez dans quel délai vous vous engagez à avoir livré la commande apres cloture de celle-ci (Chronofresh prend en moyenne 24h pour livrer à partir du moment où il a récupéré la commande)</label>
                   <select
                     value={deliveryLeadType === 'fixed_day' ? 'fixed_day' : `days-${deliveryLeadDays}`}
                     onChange={(e) => {
@@ -1911,7 +1956,7 @@ function ProfileEditPanel({
                         }
                       }
                     }}
-                    disabled={!chronofreshEnabled}
+                    disabled={producerSettingsDisabled || !chronofreshEnabled}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                   >
                     <option value="days-1">J+1</option>
@@ -1928,7 +1973,7 @@ function ProfileEditPanel({
                     <select
                       value={deliveryFixedDay}
                       onChange={(e) => setDeliveryFixedDay(e.target.value as DeliveryDay)}
-                      disabled={!chronofreshEnabled}
+                      disabled={producerSettingsDisabled || !chronofreshEnabled}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     >
                       {deliveryDayOptions.map((option) => (
@@ -1947,7 +1992,7 @@ function ProfileEditPanel({
                       value={chronofreshMinWeight}
                       onChange={(e) => setChronofreshMinWeight(Number(e.target.value))}
                       min="0"
-                      disabled={!chronofreshEnabled}
+                      disabled={producerSettingsDisabled || !chronofreshEnabled}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -1958,7 +2003,7 @@ function ProfileEditPanel({
                       value={chronofreshMaxWeight}
                       onChange={(e) => setChronofreshMaxWeight(Number(e.target.value))}
                       min="0"
-                      disabled={!chronofreshEnabled}
+                      disabled={producerSettingsDisabled || !chronofreshEnabled}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -1971,6 +2016,7 @@ function ProfileEditPanel({
                     type="checkbox"
                     checked={producerDeliveryEnabled}
                     onChange={(e) => setProducerDeliveryEnabled(e.target.checked)}
+                    disabled={producerSettingsDisabled}
                   />
                   Vous pouvez assurer la livraison selon certaines conditions (à préciser ci-dessous)
                 </label>
@@ -1983,12 +2029,12 @@ function ProfileEditPanel({
                         key={option.id}
                         type="button"
                         onClick={() => toggleDeliveryDay(option.id, setProducerDeliveryDays)}
-                        disabled={!producerDeliveryEnabled}
+                        disabled={producerSettingsDisabled || !producerDeliveryEnabled}
                         className={`px-3 py-1 rounded-full border text-xs ${
                           isActive
                             ? 'border-[#FF6B4A] bg-[#FFF1ED] text-[#FF6B4A]'
                             : 'border-gray-200 text-[#6B7280]'
-                        } ${producerDeliveryEnabled ? '' : 'opacity-60 cursor-not-allowed'}`}
+                        } ${producerSettingsDisabled || !producerDeliveryEnabled ? 'opacity-60 cursor-not-allowed' : ''}`}
                       >
                         {option.label}
                       </button>
@@ -2003,7 +2049,7 @@ function ProfileEditPanel({
                       value={producerDeliveryMinWeight}
                       onChange={(e) => setProducerDeliveryMinWeight(Number(e.target.value))}
                       min="0"
-                      disabled={!producerDeliveryEnabled}
+                      disabled={producerSettingsDisabled || !producerDeliveryEnabled}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -2014,7 +2060,7 @@ function ProfileEditPanel({
                       value={producerDeliveryMaxWeight}
                       onChange={(e) => setProducerDeliveryMaxWeight(Number(e.target.value))}
                       min="0"
-                      disabled={!producerDeliveryEnabled}
+                      disabled={producerSettingsDisabled || !producerDeliveryEnabled}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -2028,7 +2074,7 @@ function ProfileEditPanel({
                       onChange={(e) => setProducerDeliveryRadiusKm(Number(e.target.value))}
                       min="0"
                       step="1"
-                      disabled={!producerDeliveryEnabled}
+                      disabled={producerSettingsDisabled || !producerDeliveryEnabled}
                       className="flex-1 px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -2040,41 +2086,38 @@ function ProfileEditPanel({
                       min="0"
                       max="100"
                       step="1"
-                      disabled={!producerDeliveryEnabled}
+                      disabled={producerSettingsDisabled || !producerDeliveryEnabled}
                       className="flex-1 accent-[#FF6B4A]"
                     />
-                    <span className="text-xs text-[#6B7280]">
-                      {producerDeliveryRadiusKm.toFixed(0)} km
-                    </span>
+                    <span className="text-xs text-[#6B7280]">{producerDeliveryRadiusKm.toFixed(0)} km</span>
                   </div>
                 </div>
-                
 
-            {producerDeliveryEnabled && (
-              <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <h4 className="text-[#1F2937] font-semibold">Zone de livraison</h4>
-                </div>
-                <div
-                  ref={deliveryMapContainerRef}
-                  className="w-full rounded-lg overflow-hidden border border-gray-200"
-                  style={{ height: 260, minHeight: 260 }}
-                />
-                {!deliveryAddressQuery && (
-                  <p className="text-xs text-[#9CA3AF]">
-                    Renseignez l'adresse, le code postal et la ville dans "Coordonnées" pour positionner la carte.
-                  </p>
+                {producerDeliveryEnabled && (
+                  <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <h4 className="text-[#1F2937] font-semibold">Zone de livraison</h4>
+                    </div>
+                    <div
+                      ref={deliveryMapContainerRef}
+                      className="w-full rounded-lg overflow-hidden border border-gray-200"
+                      style={{ height: 260, minHeight: 260 }}
+                    />
+                    {!deliveryAddressQuery && (
+                      <p className="text-xs text-[#9CA3AF]">
+                        Renseignez l'adresse, le code postal et la ville dans "Coordonnées" pour positionner la carte.
+                      </p>
+                    )}
+                    {deliveryAddressQuery && deliveryMapStatus === 'loading' && (
+                      <p className="text-xs text-[#9CA3AF]">Recherche de l'adresse...</p>
+                    )}
+                    {deliveryAddressQuery && deliveryMapStatus === 'error' && (
+                      <p className="text-xs text-[#B45309]">
+                        Adresse introuvable. Vérifiez les coordonnées.
+                      </p>
+                    )}
+                  </div>
                 )}
-                {deliveryAddressQuery && deliveryMapStatus === 'loading' && (
-                  <p className="text-xs text-[#9CA3AF]">Recherche de l'adresse...</p>
-                )}
-                {deliveryAddressQuery && deliveryMapStatus === 'error' && (
-                  <p className="text-xs text-[#B45309]">
-                    Adresse introuvable. Vérifiez les coordonnées.
-                  </p>
-                )}
-              </div>
-            )}
                 <div className="space-y-1">
                   <label className="block text-xs text-[#6B7280]">Frais de livraison par livraison (€)</label>
                   <input
@@ -2083,7 +2126,7 @@ function ProfileEditPanel({
                     onChange={(e) => setProducerDeliveryFee(Number(e.target.value))}
                     min="0"
                     step="0.01"
-                    disabled={!producerDeliveryEnabled}
+                    disabled={producerSettingsDisabled || !producerDeliveryEnabled}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                   />
                 </div>
@@ -2096,6 +2139,7 @@ function ProfileEditPanel({
                     type="checkbox"
                     checked={producerPickupEnabled}
                     onChange={(e) => setProducerPickupEnabled(e.target.checked)}
+                    disabled={producerSettingsDisabled}
                   />
                   Retrait possible de la commande directement sur votre exploitation par le créateur de la commande (partageur)
                 </label>
@@ -2108,12 +2152,12 @@ function ProfileEditPanel({
                         key={option.id}
                         type="button"
                         onClick={() => toggleDeliveryDay(option.id, setProducerPickupDays)}
-                        disabled={!producerPickupEnabled}
+                        disabled={producerSettingsDisabled || !producerPickupEnabled}
                         className={`px-3 py-1 rounded-full border text-xs ${
                           isActive
                             ? 'border-[#FF6B4A] bg-[#FFF1ED] text-[#FF6B4A]'
                             : 'border-gray-200 text-[#6B7280]'
-                        } ${producerPickupEnabled ? '' : 'opacity-60 cursor-not-allowed'}`}
+                        } ${producerSettingsDisabled || !producerPickupEnabled ? 'opacity-60 cursor-not-allowed' : ''}`}
                       >
                         {option.label}
                       </button>
@@ -2127,7 +2171,7 @@ function ProfileEditPanel({
                       type="time"
                       value={producerPickupStartTime}
                       onChange={(e) => setProducerPickupStartTime(e.target.value)}
-                      disabled={!producerPickupEnabled}
+                      disabled={producerSettingsDisabled || !producerPickupEnabled}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -2137,7 +2181,7 @@ function ProfileEditPanel({
                       type="time"
                       value={producerPickupEndTime}
                       onChange={(e) => setProducerPickupEndTime(e.target.value)}
-                      disabled={!producerPickupEnabled}
+                      disabled={producerSettingsDisabled || !producerPickupEnabled}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -2150,7 +2194,7 @@ function ProfileEditPanel({
                       value={producerPickupMinWeight}
                       onChange={(e) => setProducerPickupMinWeight(Number(e.target.value))}
                       min="0"
-                      disabled={!producerPickupEnabled}
+                      disabled={producerSettingsDisabled || !producerPickupEnabled}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -2161,7 +2205,7 @@ function ProfileEditPanel({
                       value={producerPickupMaxWeight}
                       onChange={(e) => setProducerPickupMaxWeight(Number(e.target.value))}
                       min="0"
-                      disabled={!producerPickupEnabled}
+                      disabled={producerSettingsDisabled || !producerPickupEnabled}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                     />
                   </div>
@@ -2169,41 +2213,91 @@ function ProfileEditPanel({
               </div>
             </div>
           </section>
-        )}
 
+        </>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div className="space-y-6 pb-12">
+      <div className="profile-edit-header flex items-center justify-between">
+        <div>
+          <h2 className="text-[#1F2937] text-xl font-semibold">Modifier le profil</h2>
+          <p className="text-sm text-[#6B7280]">Retrouvez les réglages de l ancien profil.</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="px-3 py-1 rounded-lg border border-gray-200 text-[#1F2937] hover:border-[#FF6B4A]"
+        >
+          Retour sans enregistrer
+        </button>
       </div>
 
-    </div>
-  );
-}
 
-function RoleButton({
-  label,
-  active,
-  onClick,
-  disabled,
-  hint,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  disabled?: boolean;
-  hint?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={hint}
-      className={`py-2 px-4 rounded-lg border-2 transition-colors ${
-        active
-          ? 'border-[#FF6B4A] bg-[#FF6B4A]/10 text-[#FF6B4A]'
-          : 'border-gray-200 text-[#6B7280] hover:border-[#FFD166]'
-      } ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
-    >
-      {label}
-    </button>
+      <div className="bg-white rounded-xl p-6 shadow-sm space-y-6">
+        <div className="profile-edit-hero flex items-start justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="profile-avatar rounded-full overflow-hidden ring-2 ring-[#FFE8D7] bg-gradient-to-br from-[#FF6B4A] to-[#FFD166] flex items-center justify-center text-xl text-white">
+              <Avatar
+                supabaseClient={supabaseClient ?? null}
+                path={user.avatarPath}
+                updatedAt={avatarVersion}
+                fallbackSrc={avatarFallbackSrc}
+                alt={name || user.name}
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="text-xl font-semibold text-[#1F2937]">{name || user.name}</div>
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1 bg-[#FF6B4A]/10 text-[#FF6B4A] text-xs rounded-full">
+                  {computedRole === 'producer'
+                    ? 'Producteur'
+                    : computedRole === 'sharer'
+                      ? 'Partageur'
+                      : 'Participant'}
+                </span>
+                {user.verified && (
+                  <span className="px-3 py-1 bg-[#28C1A5]/10 text-[#28C1A5] text-xs rounded-full flex items-center gap-1">
+                    <Shield className="w-3 h-3" />
+                    Vérifié
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-[#6B7280]">Edition du profil</p>
+            </div>
+          </div>
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 rounded-lg bg-[#FF6B4A] text-white hover:bg-[#FF5A39] transition-colors"
+          >
+            Enregistrer
+          </button>
+        </div>
+
+        <div className="profile-tabs-wrapper" aria-label="Onglets de profil">
+          <div className="profile-tabs">
+            {editTabs.map((tab) => {
+              const isActive = editTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setEditTab(tab.id)}
+                  aria-pressed={isActive}
+                  className={`profile-tab${isActive ? ' profile-tab--active' : ''}`}
+                >
+                  <span className="profile-tab-label">{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="profile-tab-content">{renderEditTabContent()}</div>
+        </div>
+      </div>
+    </div>
   );
 }
 

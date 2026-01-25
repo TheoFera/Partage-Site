@@ -7,7 +7,6 @@ import {
   Info,
   Lock,
   MapPin,
-  Scale,
   SlidersHorizontal,
   ShoppingCart,
   ShieldCheck,
@@ -96,6 +95,63 @@ function formatPickupSlotTime(value?: string | null) {
   const match = trimmed.match(/^(\d{1,2}:\d{2})(?::\d{2})?$/);
   return match ? match[1] : trimmed;
 }
+
+const WEEKDAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+
+const toDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateValue = (value?: string | Date | null) => {
+  if (!value) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  }
+  if (typeof value !== 'string') return null;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    return new Date(year, month, day);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+};
+
+const toRange = (start: Date | null, end: Date | null) => {
+  if (!start || !end) return null;
+  const startTime = start.getTime();
+  const endTime = end.getTime();
+  if (Number.isNaN(startTime) || Number.isNaN(endTime)) return null;
+  return startTime <= endTime ? { start, end } : { start: end, end: start };
+};
+
+const isDateInRange = (date: Date, range: { start: Date; end: Date } | null) => {
+  if (!range) return false;
+  const time = date.getTime();
+  return time >= range.start.getTime() && time <= range.end.getTime();
+};
+
+const buildCalendarDays = (month: Date) => {
+  const year = month.getFullYear();
+  const monthIndex = month.getMonth();
+  const firstDay = new Date(year, monthIndex, 1);
+  const lastDay = new Date(year, monthIndex + 1, 0);
+  const offset = (firstDay.getDay() + 6) % 7;
+  const totalDays = lastDay.getDate();
+  const totalCells = Math.ceil((offset + totalDays) / 7) * 7;
+  return Array.from({ length: totalCells }, (_, index) => {
+    const dayNumber = index - offset + 1;
+    if (dayNumber < 1 || dayNumber > totalDays) return null;
+    return new Date(year, monthIndex, dayNumber);
+  });
+};
 
 function getProductWeightKg(product: { weightKg?: number; unit?: string; measurement?: 'unit' | 'kg' }) {
   if (product.weightKg) return product.weightKg;
@@ -563,8 +619,6 @@ const sharerAvatarUpdatedAt =
   const extraPercent = Math.max(0, progressPercent - 100);
   const remainingWeight = Math.max(order.minWeightKg - totalWeightTowardsGoal, 0);
   const isMinimumReached = order.minWeightKg <= 0 || alreadyOrderedWeight >= order.minWeightKg;
-  const maxWeightLabel =
-    typeof order.maxWeightKg === 'number' ? `${order.maxWeightKg} kg` : 'sans limite';
   const participantTotalsCents = React.useMemo(
     () =>
       orderFullValue.participants.reduce(
@@ -1047,16 +1101,37 @@ const sharerAvatarUpdatedAt =
         const start = formatPickupSlotTime(slot.startTime);
         const end = formatPickupSlotTime(slot.endTime);
         const timeLabel = start || end ? `${start || '??'} - ${end || '??'}` : 'Horaire a definir';
+        const slotDate = parseDateValue(slot.slotDate);
+        const dateKey = slotDate ? toDateKey(slotDate) : null;
         return {
           id: slot.id,
           label,
           timeLabel,
           enabled: slot.enabled,
+          dateKey,
+          sortOrder: slot.sortOrder ?? 0,
+          start,
+          end,
         };
       }),
     [orderFullValue.pickupSlots]
   );
   const hasPickupSlots = pickupSlots.length > 0;
+  const pickupSlotsByDate = React.useMemo(() => {
+    const map = new Map<string, (typeof pickupSlots)[number][]>();
+    pickupSlots.forEach((slot) => {
+      if (!slot.dateKey) return;
+      const list = map.get(slot.dateKey) ?? [];
+      list.push(slot);
+      map.set(slot.dateKey, list);
+    });
+    return map;
+  }, [pickupSlots]);
+  const pickupSlotDateKeys = React.useMemo(() => {
+    const keys = Array.from(pickupSlotsByDate.keys());
+    keys.sort();
+    return keys;
+  }, [pickupSlotsByDate]);
   const pickupWindowWeeks =
     typeof order.pickupWindowWeeks === 'number' && order.pickupWindowWeeks > 0
       ? order.pickupWindowWeeks
@@ -1083,6 +1158,59 @@ const sharerAvatarUpdatedAt =
   const isPickupSelectionOpen = ['delivered', 'distributed', 'finished'].includes(order.status);
   const canSelectPickupSlot = isPickupSelectionOpen && Boolean(myParticipant);
   const shouldHidePickupSlots = isVisitor;
+  const canShowPickupSlotDetails = pickupSlotsByDate.size > 0 && !shouldHidePickupSlots;
+  const createdAtDay = parseDateValue(order.createdAt);
+  const deadlineDay = parseDateValue(order.deadline);
+  const estimatedDeliveryDay = parseDateValue(estimatedDeliveryDate ?? null);
+  const pickupWindowEndDay = parseDateValue(pickupWindowEndDate ?? null);
+  const explicitPickupDay = order.usePickupDate ? parseDateValue(order.pickupDate ?? null) : null;
+  const slotRangeStart = pickupSlotDateKeys.length ? parseDateValue(pickupSlotDateKeys[0]) : null;
+  const slotRangeEnd = pickupSlotDateKeys.length
+    ? parseDateValue(pickupSlotDateKeys[pickupSlotDateKeys.length - 1])
+    : null;
+  const openRange = toRange(createdAtDay, deadlineDay);
+  const deliveryRange = toRange(deadlineDay, estimatedDeliveryDay);
+  const availabilityRange = explicitPickupDay
+    ? { start: explicitPickupDay, end: explicitPickupDay }
+    : toRange(estimatedDeliveryDay ?? slotRangeStart, pickupWindowEndDay ?? slotRangeEnd);
+  const calendarSeedKey = availabilityRange
+    ? toDateKey(availabilityRange.start)
+    : deliveryRange
+      ? toDateKey(deliveryRange.start)
+      : openRange
+        ? toDateKey(openRange.start)
+        : toDateKey(new Date());
+  const initialCalendarMonth = React.useMemo(() => {
+    const seed = parseDateValue(calendarSeedKey) ?? new Date();
+    return new Date(seed.getFullYear(), seed.getMonth(), 1);
+  }, [calendarSeedKey]);
+  const [calendarMonth, setCalendarMonth] = React.useState<Date>(() => initialCalendarMonth);
+  const [selectedPickupDateKey, setSelectedPickupDateKey] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!order.id) return;
+    setCalendarMonth(initialCalendarMonth);
+    setSelectedPickupDateKey(null);
+  }, [order.id, initialCalendarMonth]);
+  const calendarDays = React.useMemo(() => buildCalendarDays(calendarMonth), [calendarMonth]);
+  const calendarMonthLabel = React.useMemo(
+    () => calendarMonth.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
+    [calendarMonth]
+  );
+  const today = React.useMemo(() => new Date(), []);
+  const todayKey = toDateKey(today);
+  const selectedPickupDate = selectedPickupDateKey ? parseDateValue(selectedPickupDateKey) : null;
+  const selectedDateSlots = selectedPickupDateKey ? pickupSlotsByDate.get(selectedPickupDateKey) ?? [] : [];
+  const selectedDateLabel = selectedPickupDate
+    ? selectedPickupDate.toLocaleDateString('fr-FR')
+    : selectedPickupDateKey;
+  const selectedDateSlotsSorted = React.useMemo(() => {
+    if (selectedDateSlots.length === 0) return [];
+    return [...selectedDateSlots].sort((a, b) => {
+      const order = a.sortOrder - b.sortOrder;
+      if (order !== 0) return order;
+      return (a.start ?? '').localeCompare(b.start ?? '');
+    });
+  }, [selectedDateSlots]);
   const pickupSlotStatusLabel =
     myParticipant?.pickupSlotStatus === 'accepted'
       ? 'Accepté'
@@ -1133,10 +1261,6 @@ const sharerAvatarUpdatedAt =
         ? 'Choix de créneau disponible'
         : 'Choix du créneau de récupération disponible après réception'
       : order.message || 'Voir message de retrait';
-  const deadlineDate = order.deadline ?? new Date();
-  const now = React.useMemo(() => new Date(), []);
-  const daysLeft = Math.max(0, Math.ceil((deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
-  const hasPassedDeadline = deadlineDate.getTime() < now.getTime();
   const statusLabel = ORDER_STATUS_LABELS[order.status] ?? getOrderStatusLabel(order.status);
   const statusTone =
     order.status === 'finished'
@@ -1150,14 +1274,14 @@ const sharerAvatarUpdatedAt =
             : 'warning';
   const statusColor =
     statusTone === 'success'
-      ? 'bg-[#DCFCE7] text-[#166534] border-[#BBF7D0]'
+      ? 'order-client-view__status-pill--success'
       : statusTone === 'danger'
-        ? 'bg-[#FEE2E2] text-[#B91C1C] border-[#FECACA]'
+        ? 'order-client-view__status-pill--danger'
         : statusTone === 'warning'
-          ? 'bg-[#FEF3C7] text-[#92400E] border-[#FDE68A]'
+          ? 'order-client-view__status-pill--warning'
           : statusTone === 'muted'
-            ? 'bg-[#F3F4F6] text-[#4B5563] border-[#E5E7EB]'
-            : 'bg-[#E0F2FE] text-[#075985] border-[#BAE6FD]';
+            ? 'order-client-view__status-pill--muted'
+            : 'order-client-view__status-pill--info';
   const statusProgress = getOrderStatusProgress(order.status);
   const canViewStatusProgress =
     order.status !== 'open' &&
@@ -1346,81 +1470,81 @@ const sharerAvatarUpdatedAt =
 
   return (
     <div className="max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 space-y-6 md:space-y-8">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <button
-          onClick={onClose}
-          className="order-client-view__back-button"
-          type="button"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Retour
-        </button>
-        <div className="flex items-center gap-2 flex-wrap">
+      <div className="space-y-2">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <button
+            onClick={onClose}
+            className="order-client-view__back-button"
+            type="button"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Retour
+          </button>
           <span className={`order-client-view__status-pill ${statusColor}`}>
             Statut : {statusLabel}
           </span>
-          {isOwner && (
-            <>
-              <button
-                type="button"
-                onClick={handleVisibilityToggle}
-                className={`order-client-view__visibility-button ${
-                  order.visibility === 'public'
-                    ? 'order-client-view__visibility-button--public'
-                    : 'order-client-view__visibility-button--private'
-                }`}
-              >
-                {order.visibility === 'public' ? <Globe2 className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-                {order.visibility === 'public' ? 'Commande publique' : 'Commande privée'}
-              </button>
-              <button
-                type="button"
-                onClick={() => updateAutoApproveParticipationRequests(!autoApproveParticipationRequests)}
-                className={`order-client-view__visibility-button ${
-                  autoApproveParticipationRequests
-                    ? 'order-client-view__visibility-button--public'
-                    : 'order-client-view__visibility-button--private'
-                }`}
-                aria-pressed={autoApproveParticipationRequests}
-                title="Validation directe ou au cas par cas des demandes de participation"
-              >
-                <span className="block text-[11px] text-center leading-tight break-words max-w-[220px]">
-                  Validation des participants {autoApproveParticipationRequests ? 'automatique' : 'manuelle'}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => updateAllowSharerMessages(!allowSharerMessages)}
-                className={`order-client-view__visibility-button ${
-                  allowSharerMessages
-                    ? 'order-client-view__visibility-button--public'
-                    : 'order-client-view__visibility-button--private'
-                }`}
-                aria-pressed={allowSharerMessages}
-                title="Autoriser ou ne pas autoriser les messages entrants des potentiels participants"
-              >
-                <span className="block text-[11px] text-center leading-tight break-words max-w-[220px]">
-                  Messages {allowSharerMessages ? 'acceptés' : 'désactivés'}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => updateAutoApprovePickupSlots(!autoApprovePickupSlots)}
-                className={`order-client-view__visibility-button ${
-                  autoApprovePickupSlots
-                    ? 'order-client-view__visibility-button--public'
-                    : 'order-client-view__visibility-button--private'
-                }`}
-                aria-pressed={autoApprovePickupSlots}
-                title="Validation directe ou au cas par cas des demandes de rendez-vous pour la récupération des produits"
-              >
-                <span className="block text-[11px] text-center leading-tight break-words max-w-[220px]">
-                  Validation des rendez-vous {autoApprovePickupSlots ? 'automatique' : 'manuelle'}
-                </span>
-              </button>
-            </>
-          )}
         </div>
+        {isOwner && (
+          <div className="order-client-view__owner-actions">
+            <button
+              type="button"
+              onClick={handleVisibilityToggle}
+              className={`order-client-view__visibility-button ${
+                order.visibility === 'public'
+                  ? 'order-client-view__visibility-button--public'
+                  : 'order-client-view__visibility-button--private'
+              }`}
+            >
+              {order.visibility === 'public' ? <Globe2 className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+              {order.visibility === 'public' ? 'Commande publique' : 'Commande privée'}
+            </button>
+            <button
+              type="button"
+              onClick={() => updateAutoApproveParticipationRequests(!autoApproveParticipationRequests)}
+              className={`order-client-view__visibility-button ${
+                autoApproveParticipationRequests
+                  ? 'order-client-view__visibility-button--public'
+                  : 'order-client-view__visibility-button--private'
+              }`}
+              aria-pressed={autoApproveParticipationRequests}
+              title="Validation directe ou au cas par cas des demandes de participation"
+            >
+              <span className="block text-[11px] text-center leading-tight whitespace-nowrap">
+                Validation des participants {autoApproveParticipationRequests ? 'automatique' : 'manuelle'}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => updateAllowSharerMessages(!allowSharerMessages)}
+              className={`order-client-view__visibility-button ${
+                allowSharerMessages
+                  ? 'order-client-view__visibility-button--public'
+                  : 'order-client-view__visibility-button--private'
+              }`}
+              aria-pressed={allowSharerMessages}
+              title="Autoriser ou ne pas autoriser les messages entrants des potentiels participants"
+            >
+              <span className="block text-[11px] text-center leading-tight whitespace-nowrap">
+                Messages {allowSharerMessages ? 'acceptés' : 'désactivés'}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => updateAutoApprovePickupSlots(!autoApprovePickupSlots)}
+              className={`order-client-view__visibility-button ${
+                autoApprovePickupSlots
+                  ? 'order-client-view__visibility-button--public'
+                  : 'order-client-view__visibility-button--private'
+              }`}
+              aria-pressed={autoApprovePickupSlots}
+              title="Validation directe ou au cas par cas des demandes de rendez-vous pour la récupération des produits"
+            >
+              <span className="block text-[11px] text-center leading-tight whitespace-nowrap">
+                Validation des rendez-vous {autoApprovePickupSlots ? 'automatique' : 'manuelle'}
+              </span>
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="order-client-view__layout">
@@ -1472,27 +1596,183 @@ const sharerAvatarUpdatedAt =
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
-                  <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                  <Scale className="w-4 h-4 text-[#FF6B4A]" />
-                  Capacité
-                </div>
-                <p className="text-[#1F2937] font-semibold text-lg">
-                  {order.minWeightKg} kg - {maxWeightLabel}
-                </p>
-              </div>
-                <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
-                  <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                    <CalendarClock className="w-4 h-4 text-[#FF6B4A]" />
-                    Date de clôture
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4">
+                <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-3 shadow-sm order-client-view__calendar-card">
+                  <div className="order-client-view__calendar-header">
+                    <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
+                      <CalendarClock className="w-4 h-4 text-[#FF6B4A]" />
+                      Calendrier
+                    </div>
+                    <div className="order-client-view__calendar-nav">
+                      <button
+                        type="button"
+                        className="order-client-view__calendar-nav-button"
+                        onClick={() =>
+                          setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
+                        }
+                        aria-label="Mois precedent"
+                      >
+                        <ChevronLeft className="w-4 h-4 text-[#4B5563]" />
+                      </button>
+                      <span className="order-client-view__calendar-month">{calendarMonthLabel}</span>
+                      <button
+                        type="button"
+                        className="order-client-view__calendar-nav-button"
+                        onClick={() =>
+                          setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
+                        }
+                        aria-label="Mois suivant"
+                      >
+                        <ChevronRight className="w-4 h-4 text-[#4B5563]" />
+                      </button>
+                    </div>
                   </div>
-                  <p className="text-[#1F2937] font-semibold text-lg">
-                    {deadlineDate.toLocaleDateString('fr-FR')}
-                  </p>
-                  <p className="text-xs text-[#6B7280]">
-                    {hasPassedDeadline ? 'Echeance depassee' : `Dans ${daysLeft} jour${daysLeft > 1 ? 's' : ''}`}
-                  </p>
+                  <div className="order-client-view__calendar-legend">
+                    <span className="order-client-view__calendar-legend-item">
+                      <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--open" />
+                      Open
+                    </span>
+                    <span className="order-client-view__calendar-legend-item">
+                      <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--delivery" />
+                      Livraison
+                    </span>
+                    <span className="order-client-view__calendar-legend-item">
+                      <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--availability" />
+                      Disponibilite
+                    </span>
+                  </div>
+                  <div className="order-client-view__calendar-grid">
+                    {WEEKDAY_LABELS.map((label) => (
+                      <div key={label} className="order-client-view__calendar-weekday">
+                        {label}
+                      </div>
+                    ))}
+                    {calendarDays.map((day, index) => {
+                      if (!day) {
+                        return (
+                          <div
+                            key={`empty-${index}`}
+                            className="order-client-view__calendar-day order-client-view__calendar-day--empty"
+                            aria-hidden="true"
+                          />
+                        );
+                      }
+                      const dateKey = toDateKey(day);
+                      const isInAvailability = availabilityRange ? isDateInRange(day, availabilityRange) : false;
+                      const isInDelivery = deliveryRange ? isDateInRange(day, deliveryRange) : false;
+                      const isInOpen = openRange ? isDateInRange(day, openRange) : false;
+                      const isSelected = selectedPickupDateKey === dateKey;
+                      const isToday = todayKey === dateKey;
+                      const hasSlots =
+                        canShowPickupSlotDetails &&
+                        (pickupSlotsByDate.get(dateKey) ?? []).some((slot) => slot.enabled);
+                      const isClickable = Boolean(availabilityRange) && isInAvailability && canShowPickupSlotDetails;
+                      const toneClass = isInAvailability
+                        ? 'order-client-view__calendar-day--availability'
+                        : isInDelivery
+                          ? 'order-client-view__calendar-day--delivery'
+                          : isInOpen
+                            ? 'order-client-view__calendar-day--open'
+                            : '';
+                      return (
+                        <button
+                          key={dateKey}
+                          type="button"
+                          className={`order-client-view__calendar-day ${toneClass} ${
+                            isSelected ? 'order-client-view__calendar-day--selected' : ''
+                          } ${isToday ? 'order-client-view__calendar-day--today' : ''} ${
+                            isClickable
+                              ? 'order-client-view__calendar-day--clickable'
+                              : 'order-client-view__calendar-day--inactive'
+                          }`}
+                          onClick={() => {
+                            if (!isClickable) return;
+                            setSelectedPickupDateKey(dateKey);
+                          }}
+                          aria-pressed={isSelected}
+                          aria-disabled={!isClickable}
+                          tabIndex={isClickable ? 0 : -1}
+                        >
+                          <span>{day.getDate()}</span>
+                          {hasSlots && <span className="order-client-view__calendar-day-dot" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {canShowPickupSlotDetails && (
+                    <div className="order-client-view__calendar-slots">
+                      {selectedPickupDateKey ? (
+                        <>
+                          <div className="order-client-view__calendar-slots-header">
+                            <span className="order-client-view__calendar-slots-title">
+                              Disponibilites le {selectedDateLabel}
+                            </span>
+                            {!canSelectPickupSlot && (
+                              <span className="order-client-view__calendar-slots-status">
+                                Selection possible apres livraison
+                              </span>
+                            )}
+                          </div>
+                          {selectedDateSlotsSorted.length === 0 ? (
+                            <p className="order-client-view__calendar-slots-note">Aucun creneau pour cette date.</p>
+                          ) : (
+                            <div className="order-client-view__pickup-slots-grid">
+                              {selectedDateSlotsSorted.map((slot) => {
+                                const isSelected = myParticipant?.pickupSlotId === slot.id;
+                                const isDisabled = !slot.enabled || !canSelectPickupSlot;
+                                return (
+                                  <button
+                                    key={slot.id}
+                                    type="button"
+                                    className={`order-client-view__pickup-slot ${
+                                      isDisabled ? 'order-client-view__pickup-slot--disabled' : ''
+                                    } ${isSelected ? 'order-client-view__pickup-slot--selected' : ''}`}
+                                    onClick={() => {
+                                      if (isDisabled || isWorking) return;
+                                      handlePickupSlotSelect(slot.id);
+                                    }}
+                                    disabled={isDisabled || isWorking}
+                                  >
+                                    <div>
+                                      <p className="order-client-view__pickup-slot-date">{slot.timeLabel}</p>
+                                      <p className="order-client-view__pickup-slot-time">{slot.label}</p>
+                                    </div>
+                                    <div className="order-client-view__pickup-slot-status">
+                                      {isSelected && (
+                                        <span className="order-client-view__pickup-slot-tag">Selectionne</span>
+                                      )}
+                                      {isSelected && !autoApprovePickupSlots && pickupSlotStatusLabel && (
+                                        <span className="order-client-view__pickup-slot-tag order-client-view__pickup-slot-tag--pending">
+                                          Demande envoyee - {pickupSlotStatusLabel}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {canSelectPickupSlot ? (
+                            <p className="order-client-view__calendar-slots-note">
+                              {autoApprovePickupSlots
+                                ? 'Votre creneau est valide automatiquement.'
+                                : 'Votre demande sera validee manuellement.'}
+                            </p>
+                          ) : (
+                            <p className="order-client-view__calendar-slots-note">
+                              {isPickupSelectionOpen
+                                ? 'Connectez-vous en tant que participant pour selectionner un creneau.'
+                                : 'La selection des creneaux sera ouverte une fois la commande livree.'}
+                            </p>
+                          )}
+                        </>
+                      ) : (
+                        <p className="order-client-view__calendar-slots-note">
+                          Selectionnez un jour dans la periode de recuperation.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
                   <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
@@ -1501,56 +1781,7 @@ const sharerAvatarUpdatedAt =
                   </div>
                   <p className="text-[#1F2937] font-semibold text-lg leading-tight">{pickupLine}</p>
                   {pickupWindowLabel && (
-                    <p className="text-xs text-[#6B7280]">Période de recuperation : {pickupWindowLabel}</p>
-                  )}
-                  {hasPickupSlots && !shouldHidePickupSlots && (
-                    <div className="order-client-view__pickup-slots">
-                      <div className="order-client-view__pickup-slots-header">
-                        <span className="order-client-view__pickup-slots-title">Créneaux disponibles</span>
-                        <span className="order-client-view__pickup-slots-count">{pickupSlots.length}</span>
-                      </div>
-                      <div className="order-client-view__pickup-slots-grid">
-                        {pickupSlots.map((slot) => {
-                          const isSelected = myParticipant?.pickupSlotId === slot.id;
-                          const isDisabled = !slot.enabled || !canSelectPickupSlot;
-                          return (
-                            <button
-                              key={slot.id}
-                              type="button"
-                              className={`order-client-view__pickup-slot ${
-                                isDisabled ? 'order-client-view__pickup-slot--disabled' : ''
-                              } ${isSelected ? 'order-client-view__pickup-slot--selected' : ''}`}
-                              onClick={() => {
-                                if (isDisabled || isWorking) return;
-                                handlePickupSlotSelect(slot.id);
-                              }}
-                              disabled={isDisabled || isWorking}
-                            >
-                              <div>
-                                <p className="order-client-view__pickup-slot-date">{slot.label}</p>
-                                <p className="order-client-view__pickup-slot-time">{slot.timeLabel}</p>
-                              </div>
-                              <div className="order-client-view__pickup-slot-status">
-                                {isSelected && (
-                                  <span className="order-client-view__pickup-slot-tag">Sélectionné</span>
-                                )}
-                                {isSelected && !autoApprovePickupSlots && pickupSlotStatusLabel && (
-                                  <span className="order-client-view__pickup-slot-tag order-client-view__pickup-slot-tag--pending">
-                                    Demande envoyée · {pickupSlotStatusLabel}
-                                  </span>
-                                )}
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {!isPickupSelectionOpen && (
-                        <p className="order-client-view__pickup-slots-note">
-                          Prise de rendez-vous sur les créneaux après réception des produits par le créateur de la
-                          commande. Tu pourras choisir ton créneau une fois les produits réceptionnés par le partageur.
-                        </p>
-                      )}
-                    </div>
+                    <p className="text-xs text-[#6B7280]">Periode de recuperation : {pickupWindowLabel}</p>
                   )}
                 </div>
                 {isProducer && (
@@ -1568,7 +1799,6 @@ const sharerAvatarUpdatedAt =
                   </div>
                 )}
               </div>
-
               {order.message && (
                 <div className="bg-white border border-[#FFDCC4] rounded-2xl p-4 text-sm text-[#92400E] shadow-sm">
                   <span className="inline-flex items-center gap-2 font-semibold text-[#B45309]">
